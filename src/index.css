@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f3f6fb;
+  color: #172033;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+html {
+  min-height: 100%;
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  overscroll-behavior-y: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid rgba(45, 143, 213, 0.45);
+  outline-offset: 2px;
+}
+
+@layer components {
+  .input {
+    min-height: 44px;
+    width: 100%;
+    border-radius: 1rem;
+    border: 1px solid rgb(226 232 240);
+    background: white;
+    padding: 0.625rem 0.75rem;
+    font-size: 16px;
+    color: #172033;
+  }
+
+  .input::placeholder {
+    color: rgb(113 113 122);
+  }
+
+  .icon-btn {
+    display: inline-grid;
+    min-height: 44px;
+    min-width: 44px;
+    place-items: center;
+    border-radius: 0.75rem;
+    border: 1px solid rgb(228 228 231);
+    color: rgb(63 63 70);
+    background: white;
+  }
+
+  .icon-btn:hover {
+    border-color: #2d8fd5;
+    color: #123a73;
+  }
+}
