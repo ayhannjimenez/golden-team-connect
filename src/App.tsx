@@ -1810,24 +1810,25 @@ function App() {
   );
 
   const renderEntry = () => (
-    <div className="theme-golden min-h-screen bg-black px-5 py-[calc(env(safe-area-inset-top)+1.25rem)] text-white">
+    <div className="theme-golden min-h-screen bg-black px-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pt-[calc(env(safe-area-inset-top)+1.5rem)] text-white">
       <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md flex-col justify-center">
-        <div className="mb-8 overflow-hidden rounded-[2rem] bg-black">
-          <img src={logoSrc} alt="Golden Team" className="mx-auto w-full max-w-sm object-contain mix-blend-screen" />
-        </div>
-        <div className="text-center">
-          <p className="text-sm font-bold uppercase tracking-[0.25em] text-gold">Acceso interno del equipo</p>
-          <h1 className="mt-3 text-4xl font-black tracking-normal">Golden Team Connect</h1>
-          <p className="mt-2 text-white/70">Organiza. Da seguimiento. Mantente conectado.</p>
+        <div className="mb-10 text-center">
+          <div className="mb-7 select-none">
+            <p className="text-[2.65rem] font-black leading-none tracking-[0.26em] text-white">UNICITY</p>
+            <p className="mt-1 text-[4.4rem] font-black italic leading-none tracking-normal text-gold">GT</p>
+          </div>
+          <p className="text-xs font-bold uppercase tracking-[0.28em] text-gold/90">Acceso interno del equipo</p>
+          <h1 className="mt-4 text-4xl font-black leading-tight tracking-normal">Golden Team Connect</h1>
+          <p className="mt-3 text-base text-white/72">Organiza. Da seguimiento. Mantente conectado.</p>
           <p className="mt-2 text-sm text-white/45">Herramienta interna de Golden Team.</p>
         </div>
-        <form className="mt-8 grid gap-4" onSubmit={submitEntry}>
-          <Field label="Nombre"><input className="input border-white/10 bg-white/95 text-black" value={entryName} onChange={(event) => setEntryName(event.target.value)} placeholder="Ayhann" /></Field>
-          <Field label="Feel Great Link"><input className="input border-white/10 bg-white/95 text-black" value={entryLink} onChange={(event) => setEntryLink(event.target.value)} placeholder="https://..." /></Field>
+        <form className="grid gap-4" onSubmit={submitEntry}>
+          <Field label="Nombre"><input className="input border-white/12 bg-white/[0.97] text-black shadow-none" value={entryName} onChange={(event) => setEntryName(event.target.value)} placeholder="Ayhann" /></Field>
+          <Field label="Feel Great Link"><input className="input border-white/12 bg-white/[0.97] text-black shadow-none" value={entryLink} onChange={(event) => setEntryLink(event.target.value)} placeholder="https://..." /></Field>
           <Field label="Código de acceso">
             <div className="flex gap-2">
               <input
-                className="input border-white/10 bg-white/95 text-black"
+                className="input border-white/12 bg-white/[0.97] text-black shadow-none"
                 type={showAccessCode ? 'text' : 'password'}
                 value={entryAccessCode}
                 onChange={(event) => setEntryAccessCode(normalizeAccessCode(event.target.value))}
@@ -1840,7 +1841,7 @@ function App() {
             <span className="text-xs font-medium text-white/55">Ingresa el código proporcionado por Golden Team.</span>
           </Field>
           {entryError ? <p className="rounded-2xl border border-red-400/40 bg-red-500/15 p-3 text-sm font-bold text-red-100">{entryError}</p> : null}
-          <PrimaryButton type="submit" className="bg-gold text-black hover:bg-goldDark"><Check size={18} />Entrar</PrimaryButton>
+          <PrimaryButton type="submit" className="mt-1 bg-gold text-black shadow-none hover:bg-goldDark"><Check size={18} />Entrar</PrimaryButton>
           <p className="text-center text-xs leading-relaxed text-white/45">Esta es una puerta de acceso simple local, no autenticación profesional. No usa backend.</p>
         </form>
       </div>
