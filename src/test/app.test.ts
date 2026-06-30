@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Contact, QueueItem } from '../types';
 import { validateBackup } from '../utils/backup';
 import { exportContactsCsv, parseContactsCsv } from '../utils/csv';
-import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, personalizeMessage } from '../utils/messages';
+import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, messageNeedsFeelGreatLink, personalizeMessage } from '../utils/messages';
 import { isDuplicatePhone, normalizePhone } from '../utils/phone';
 
 const contact: Contact = {
@@ -51,6 +51,8 @@ describe('listas y mensajes', () => {
 
   it('personaliza variables', () => {
     expect(personalizeMessage('Hola {{nombre}} de {{pais}}', contact, 'Clientes')).toBe('Hola Maria de Estados Unidos');
+    expect(personalizeMessage('Hola {{nombre_contacto}}, soy {{nombre_usuario}}: {{feelgreat_link}}', contact, 'Clientes', { userName: 'Ayhann', feelGreatLink: 'https://ufeelgreat.com/c/123456' })).toBe('Hola Maria, soy Ayhann: https://ufeelgreat.com/c/123456');
+    expect(messageNeedsFeelGreatLink('Mira {{feelgreat_link}}')).toBe(true);
   });
 });
 

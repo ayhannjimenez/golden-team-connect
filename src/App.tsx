@@ -13,6 +13,9 @@ import {
   Database,
   Download,
   Edit3,
+  ExternalLink,
+  Eye,
+  EyeOff,
   FileImage,
   Home,
   Import,
@@ -29,17 +32,18 @@ import {
   Smartphone,
   Trash2,
   Upload,
+  User,
   Users,
   X
 } from 'lucide-react';
 import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 import { clearAllData, db, defaultSettings, ensureSettings } from './db';
 import { removeDemoData, seedDemoData } from './demoData';
-import type { AppSettings, Campaign, CampaignImage, CampaignPreview, Channel, Contact, ContactStatus, InternalList, MessageTemplate, QueueItem, QueueStatus } from './types';
+import type { AppSettings, Campaign, CampaignImage, CampaignPreview, Channel, Contact, ContactStatus, InternalList, MessageTemplate, QueueItem, QueueStatus, VisualTheme } from './types';
 import { backupSummary, validateBackup } from './utils/backup';
 import { csvRowToContact, exportContactsCsv, parseContactsCsv } from './utils/csv';
 import { compressImage, shareImage } from './utils/image';
-import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, personalizeMessage, smsSegments } from './utils/messages';
+import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, messageNeedsFeelGreatLink, personalizeMessage, smsSegments } from './utils/messages';
 import { isDuplicatePhone, normalizePhone } from './utils/phone';
 
 type MainSection = 'inicio' | 'personas' | 'enviar' | 'seguimiento';
@@ -84,6 +88,14 @@ const businessStatuses: BusinessStatus[] = ['Nuevo', 'Mensaje pendiente', 'Conta
 const peopleFilters: PeopleFilter[] = ['Todos', 'Nuevos', 'Contactados', 'Respondieron', 'Seguimiento', 'Cerrados'];
 const laLocations = ['Junction', 'Maitland', 'Otra ubicacion'];
 const languages = ['Espanol', 'Ingles'];
+const TEAM_PASSWORD = 'GoldenTeam2026';
+const logoSrc = `${import.meta.env.BASE_URL}golden-team-logo.jpeg`;
+const themeOptions: Array<{ id: VisualTheme; label: string; detail: string }> = [
+  { id: 'golden', label: 'Golden Team', detail: 'Negro, blanco y dorado' },
+  { id: 'classic', label: 'Classic Blue', detail: 'Azul marino, azul claro y blanco' },
+  { id: 'emerald', label: 'Emerald', detail: 'Verde oscuro, blanco y gris claro' },
+  { id: 'burgundy', label: 'Burgundy', detail: 'Vino, crema y dorado' }
+];
 
 const blankContact: Contact = {
   firstName: '',
@@ -127,6 +139,23 @@ function downloadFile(content: string, filename: string, type: string) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function normalizeFeelGreatLink(value: string) {
+  return value.trim().replace(/\s+/g, '');
+}
+
+function isValidFeelGreatLink(value: string) {
+  try {
+    const url = new URL(normalizeFeelGreatLink(value));
+    return ['http:', 'https:'].includes(url.protocol) && url.hostname.includes('.');
+  } catch {
+    return false;
+  }
+}
+
+function displayName(settings: AppSettings) {
+  return settings.ownerName.trim() || 'Ayhann';
 }
 
 function tagValue(contact: Contact, prefix: string, fallback: string) {
@@ -229,9 +258,17 @@ function App() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [ready, setReady] = useState(false);
   const [notice, setNotice] = useState('Listo.');
   const [configOpen, setConfigOpen] = useState(false);
   const [configPanel, setConfigPanel] = useState<ConfigPanel>('listas');
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [entryName, setEntryName] = useState('');
+  const [entryLink, setEntryLink] = useState('');
+  const [entryPassword, setEntryPassword] = useState('');
+  const [entryError, setEntryError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [quickLinkOpen, setQuickLinkOpen] = useState(false);
   const [laMode, setLaMode] = useState(false);
   const [contactForm, setContactForm] = useState<Contact>(blankContact);
   const [editingContactId, setEditingContactId] = useState<number | null>(null);
@@ -284,6 +321,7 @@ function App() {
     setTemplates(loadedTemplates);
     setCampaigns(loadedCampaigns);
     setQueue(loadedQueue);
+    setReady(true);
     if (!activeCampaignId && loadedCampaigns[0]?.id) setActiveCampaignId(loadedCampaigns[0].id);
     if (message) setNotice(message);
   }
@@ -392,6 +430,54 @@ function App() {
 
   function listNames(ids: number[]) {
     return ids.map((id) => lists.find((list) => list.id === id)?.name).filter(Boolean).join(', ');
+  }
+
+  function messageContext() {
+    return { userName: displayName(settings), feelGreatLink: settings.feelGreatLink || '' };
+  }
+
+  function insertMessageVariable(variable: '{{nombre_contacto}}' | '{{feelgreat_link}}') {
+    setCampaignForm((current) => ({ ...current, message: `${current.message}${current.message ? ' ' : ''}${variable}` }));
+  }
+
+  async function saveProfilePatch(patch: Partial<AppSettings>, message = 'Perfil guardado.') {
+    const updated = { ...settings, ...patch, id: 'main' as const };
+    await db.settings.put(updated);
+    setSettings(updated);
+    setNotice(message);
+  }
+
+  async function submitEntry(event: FormEvent) {
+    event.preventDefault();
+    const name = entryName.trim();
+    const link = normalizeFeelGreatLink(entryLink);
+    if (!name) return setEntryError('Escribe tu nombre.');
+    if (!isValidFeelGreatLink(link)) return setEntryError('Revisa que hayas pegado tu enlace completo.');
+    if (entryPassword !== TEAM_PASSWORD) return setEntryError('Contraseña incorrecta');
+    await saveProfilePatch({ ownerName: name, feelGreatLink: link, sessionActive: true, visualTheme: settings.visualTheme || 'golden' }, 'Bienvenido a Golden Team Connect.');
+    setEntryPassword('');
+    setEntryError('');
+  }
+
+  async function copyFeelGreatLink() {
+    if (!settings.feelGreatLink) return setNotice('Añade tu Feel Great Link en tu perfil.');
+    await navigator.clipboard.writeText(settings.feelGreatLink);
+    setNotice('Enlace copiado.');
+  }
+
+  function openFeelGreatLink() {
+    if (!settings.feelGreatLink) return setNotice('Añade tu Feel Great Link en tu perfil.');
+    window.open(settings.feelGreatLink, '_blank', 'noopener,noreferrer');
+  }
+
+  async function shareFeelGreatLink() {
+    if (!settings.feelGreatLink) return setNotice('Añade tu Feel Great Link en tu perfil.');
+    if (navigator.share) {
+      await navigator.share({ title: 'Mi Feel Great Link', text: settings.feelGreatLink, url: settings.feelGreatLink });
+      setNotice('Enlace compartido.');
+    } else {
+      await copyFeelGreatLink();
+    }
   }
 
   function resetContactForm() {
@@ -548,6 +634,10 @@ function App() {
   async function createCampaign(event?: FormEvent) {
     event?.preventDefault();
     if (!campaignForm.message.trim()) return setNotice('Escribe o selecciona un mensaje.');
+    if (messageNeedsFeelGreatLink(campaignForm.message) && !isValidFeelGreatLink(settings.feelGreatLink || '')) {
+      setProfileOpen(true);
+      return setNotice('Añade tu Feel Great Link en tu perfil para utilizar este mensaje.');
+    }
     if (campaignPreview.contacts.length === 0) return setNotice('No hay personas validas para comenzar.');
     if (!confirm(`Comenzar envios para ${campaignPreview.contacts.length} personas?`)) return;
     const campaign: Campaign = {
@@ -565,7 +655,7 @@ function App() {
         contactSnapshot: contact,
         listNames: names,
         channel: campaign.channel === 'Ambos' ? contact.preferredChannel : campaign.channel,
-        personalizedMessage: personalizeMessage(campaign.message, contact, names[0] || ''),
+        personalizedMessage: personalizeMessage(campaign.message, contact, names[0] || '', messageContext()),
         status: 'Pendiente',
         createdAt: todayIso()
       };
@@ -682,9 +772,11 @@ function App() {
 
   async function saveSettings(event: FormEvent) {
     event.preventDefault();
+    const feelGreatLink = normalizeFeelGreatLink(settings.feelGreatLink || '');
+    if (feelGreatLink && !isValidFeelGreatLink(feelGreatLink)) return setNotice('Revisa que hayas pegado tu enlace completo.');
     const normalizedPersonal = normalizePhone(settings.personalNumber, settings.defaultCountryCode);
-    await db.settings.put({ ...settings, personalNumber: normalizedPersonal.valid ? normalizedPersonal.normalized : settings.personalNumber });
-    await loadAll('Preferencias guardadas.');
+    await db.settings.put({ ...settings, feelGreatLink, personalNumber: normalizedPersonal.valid ? normalizedPersonal.normalized : settings.personalNumber });
+    await loadAll('Perfil guardado.');
   }
 
   async function deleteAllData() {
@@ -722,10 +814,10 @@ function App() {
     <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-3 pb-[calc(env(safe-area-inset-bottom)+0.55rem)] pt-2 backdrop-blur lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:border-r lg:border-t-0 lg:px-5 lg:py-6">
       <div className="mb-7 hidden lg:block">
         <div className="flex items-center gap-3">
-          <span className="grid h-12 w-12 place-items-center rounded-3xl bg-brand text-white"><MessageCircle /></span>
+          <img src={logoSrc} alt="Golden Team" className="h-12 w-12 rounded-3xl object-cover" />
           <div>
             <p className="text-lg font-black text-ink">Golden Team Connect</p>
-            <p className="text-xs leading-tight text-slate-500">Herramienta independiente para organizacion y seguimiento</p>
+            <p className="text-xs leading-tight text-slate-500">Organiza. Da seguimiento. Mantente conectado.</p>
           </div>
         </div>
       </div>
@@ -766,13 +858,24 @@ function App() {
   const renderHome = () => (
     <SectionShell>
       <div className="rounded-[2rem] bg-gradient-to-br from-brand to-brandDark p-6 text-white shadow-soft">
-        <p className="text-sm font-semibold text-sky-100">Golden Team Connect</p>
-        <h1 className="mt-2 text-3xl font-black tracking-normal">Hola, Ayhann</h1>
-        <p className="mt-1 max-w-xl text-sky-100">Herramienta independiente para organizacion y seguimiento</p>
+        <div className="flex items-center gap-3">
+          <img src={logoSrc} alt="Golden Team" className="h-12 w-12 rounded-2xl object-cover" />
+          <p className="text-sm font-semibold text-white/80">Herramienta interna de Golden Team.</p>
+        </div>
+        <h1 className="mt-4 text-3xl font-black tracking-normal">Hola, {displayName(settings)}</h1>
+        <p className="mt-1 max-w-xl text-white/80">Organiza. Da seguimiento. Mantente conectado.</p>
         <div className="mt-5 flex flex-wrap gap-2">
           <Badge tone={online ? 'good' : 'warn'}>{online ? 'En linea' : 'Modo sin conexion'}</Badge>
           <Badge tone="blue">{notice}</Badge>
+          <button onClick={() => setQuickLinkOpen((current) => !current)} className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-bold text-white">Mi enlace</button>
         </div>
+        {quickLinkOpen ? (
+          <div className="mt-4 grid gap-2 rounded-3xl border border-white/15 bg-white/10 p-3 sm:inline-grid sm:grid-cols-3">
+            <button onClick={copyFeelGreatLink} className="rounded-2xl bg-white px-3 py-2 text-sm font-bold text-brand">Copiar</button>
+            <button onClick={shareFeelGreatLink} className="rounded-2xl bg-white px-3 py-2 text-sm font-bold text-brand">Compartir</button>
+            <button onClick={openFeelGreatLink} className="rounded-2xl bg-white px-3 py-2 text-sm font-bold text-brand">Abrir</button>
+          </div>
+        ) : null}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
@@ -939,6 +1042,10 @@ function App() {
               <Field label="Canal"><select className="input" value={campaignForm.channel} onChange={(event) => setCampaignForm((current) => ({ ...current, channel: event.target.value as Channel }))}>{channels.map((item) => <option key={item}>{item}</option>)}</select></Field>
             </div>
             <Field label="Texto"><textarea className="input min-h-44" value={campaignForm.message} onChange={(event) => setCampaignForm((current) => ({ ...current, message: event.target.value }))} placeholder="Hola {{nombre}}, ..." /></Field>
+            <div className="flex flex-wrap gap-2">
+              <SecondaryButton onClick={() => insertMessageVariable('{{nombre_contacto}}')}><Plus size={16} />Añadir nombre</SecondaryButton>
+              <SecondaryButton onClick={() => insertMessageVariable('{{feelgreat_link}}')}><Plus size={16} />Añadir mi enlace</SecondaryButton>
+            </div>
             <p className="text-sm text-slate-500">{campaignForm.message.length} caracteres · {smsSegments(campaignForm.message)} segmento(s) SMS</p>
             <div className="rounded-3xl border border-slate-100 p-4">
               <input ref={fileInputRef} type="file" className="hidden" accept="image/*" capture="environment" onChange={handleImage} />
@@ -950,7 +1057,7 @@ function App() {
             </div>
             <div className="rounded-3xl bg-slate-50 p-4">
               <p className="font-bold">Vista previa</p>
-              <p className="mt-1 whitespace-pre-wrap text-slate-600">{campaignPreview.contacts[0] ? personalizeMessage(campaignForm.message, campaignPreview.contacts[0], listNames(campaignPreview.contacts[0].listIds).split(', ')[0] || '') : 'Selecciona destinatarios.'}</p>
+              <p className="mt-1 whitespace-pre-wrap text-slate-600">{campaignPreview.contacts[0] ? personalizeMessage(campaignForm.message, campaignPreview.contacts[0], listNames(campaignPreview.contacts[0].listIds).split(', ')[0] || '', messageContext()) : 'Selecciona destinatarios.'}</p>
             </div>
             <PrimaryButton onClick={() => setSendStep(3)}>Revisar<ChevronRight size={18} /></PrimaryButton>
           </div>
@@ -965,6 +1072,12 @@ function App() {
               <Badge tone="blue">{campaignPreview.contacts.length} destinatarios</Badge>
               <Badge tone={campaignPreview.excluded.length ? 'warn' : 'good'}>{campaignPreview.excluded.length} excluidos</Badge>
               <Badge tone="neutral">Canal: {campaignForm.channel}</Badge>
+              {messageNeedsFeelGreatLink(campaignForm.message) && !isValidFeelGreatLink(settings.feelGreatLink || '') ? (
+                <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  <p className="font-bold">Añade tu Feel Great Link en tu perfil para utilizar este mensaje.</p>
+                  <SecondaryButton className="mt-3" onClick={() => setProfileOpen(true)}><User size={16} />Ir a mi perfil</SecondaryButton>
+                </div>
+              ) : null}
               <div className="rounded-3xl bg-slate-50 p-4"><p className="whitespace-pre-wrap text-sm">{campaignForm.message || 'Sin mensaje.'}</p></div>
               {campaignImage ? <img src={campaignImage.dataUrl} alt="Imagen" className="max-h-56 rounded-3xl object-cover" /> : null}
               {campaignPreview.excluded.map(({ contact, reason }) => <p key={contact.id} className="text-sm text-slate-500">{contact.firstName} {contact.lastName}: {reason}</p>)}
@@ -1061,6 +1174,64 @@ function App() {
     );
   };
 
+  const renderThemePicker = () => (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {themeOptions.map((theme) => (
+        <button
+          key={theme.id}
+          onClick={() => saveProfilePatch({ visualTheme: theme.id }, `Tema ${theme.label} aplicado.`)}
+          className={`rounded-3xl border p-4 text-left transition ${settings.visualTheme === theme.id ? 'border-brand bg-brand text-white' : 'border-slate-100 bg-slate-50 text-ink'}`}
+        >
+          <span className="block font-black">{theme.label}</span>
+          <span className={`mt-1 block text-sm ${settings.visualTheme === theme.id ? 'text-white/75' : 'text-slate-500'}`}>{theme.detail}</span>
+        </button>
+      ))}
+    </div>
+  );
+
+  const renderProfile = () => (
+    <div className="fixed inset-0 z-40 bg-ink/45 p-4 pt-[calc(env(safe-area-inset-top)+1rem)] backdrop-blur-sm" onClick={() => setProfileOpen(false)}>
+      <div className="mx-auto max-h-[92vh] max-w-2xl overflow-auto rounded-[2rem] bg-white p-5 shadow-soft" onClick={(event) => event.stopPropagation()}>
+        <SectionTitle title="Perfil" subtitle="Tu acceso interno y enlace personal" action={<IconButton label="Cerrar" onClick={() => setProfileOpen(false)}><X /></IconButton>} />
+        <div className="mt-4 grid gap-4">
+          <Card className="bg-brand text-white">
+            <div className="flex items-center gap-3">
+              <img src={logoSrc} alt="Golden Team" className="h-16 w-16 rounded-3xl object-cover" />
+              <div>
+                <p className="text-sm text-white/70">Estado de sesión</p>
+                <h3 className="text-2xl font-black">{settings.sessionActive ? 'Sesión iniciada' : 'Sesión cerrada'}</h3>
+              </div>
+            </div>
+          </Card>
+
+          <form className="grid gap-3" onSubmit={saveSettings}>
+            <Field label="Nombre"><input className="input" value={settings.ownerName} onChange={(event) => setSettings((current) => ({ ...current, ownerName: event.target.value }))} /></Field>
+            <Field label="Feel Great Link"><input className="input" value={settings.feelGreatLink || ''} onChange={(event) => setSettings((current) => ({ ...current, feelGreatLink: normalizeFeelGreatLink(event.target.value) }))} placeholder="https://..." /></Field>
+            {settings.feelGreatLink && !isValidFeelGreatLink(settings.feelGreatLink) ? <Badge tone="warn">Revisa que hayas pegado tu enlace completo.</Badge> : null}
+            <PrimaryButton type="submit"><Check size={17} />Guardar perfil</PrimaryButton>
+          </form>
+
+          <Card>
+            <SectionTitle title="Mi Feel Great Link" subtitle={settings.feelGreatLink ? settings.feelGreatLink : 'Aun no has guardado tu enlace'} />
+            <div className="mt-4 grid gap-2 sm:grid-cols-4">
+              <SecondaryButton onClick={copyFeelGreatLink}><Copy size={16} />Copiar</SecondaryButton>
+              <SecondaryButton onClick={shareFeelGreatLink}><Share2 size={16} />Compartir</SecondaryButton>
+              <SecondaryButton onClick={openFeelGreatLink}><ExternalLink size={16} />Abrir</SecondaryButton>
+              <SecondaryButton onClick={() => setNotice('Edita el enlace arriba y toca Guardar perfil.')}><Edit3 size={16} />Editar</SecondaryButton>
+            </div>
+          </Card>
+
+          <Card>
+            <SectionTitle title="Tema visual" subtitle="Cuatro estilos prediseñados con buen contraste" />
+            <div className="mt-4">{renderThemePicker()}</div>
+          </Card>
+
+          <SecondaryButton onClick={() => saveProfilePatch({ sessionActive: false }, 'Sesión cerrada.')}><X size={17} />Cerrar sesión</SecondaryButton>
+        </div>
+      </div>
+    </div>
+  );
+
   const renderConfig = () => (
     <div className="fixed inset-0 z-40 bg-ink/35 p-4 pt-[calc(env(safe-area-inset-top)+1rem)] backdrop-blur-sm" onClick={() => setConfigOpen(false)}>
       <div className="mx-auto grid max-h-[92vh] max-w-6xl overflow-hidden rounded-[2rem] bg-white shadow-soft lg:grid-cols-[280px_1fr]" onClick={(event) => event.stopPropagation()}>
@@ -1100,7 +1271,7 @@ function App() {
               <select className="input" value={previewContactId} onChange={(event) => setPreviewContactId(event.target.value ? Number(event.target.value) : '')}><option value="">Persona para probar</option>{contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.firstName} {contact.lastName}</option>)}</select>
               {templates.filter((template) => template.name.toLowerCase().includes(templateSearch.toLowerCase())).map((template) => {
                 const previewContact = contacts.find((contact) => contact.id === previewContactId) || contacts[0];
-                return <article key={template.id} className="rounded-3xl border border-slate-100 p-4"><h3 className="font-black">{template.name}</h3><p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{previewContact ? personalizeMessage(template.body, previewContact, listNames(previewContact.listIds).split(', ')[0] || '') : template.body}</p><div className="mt-3 flex flex-wrap gap-2"><SecondaryButton onClick={() => { setTemplateForm(template); setEditingTemplateId(template.id!); }}><Edit3 size={16} />Editar</SecondaryButton><SecondaryButton onClick={() => db.templates.add({ name: `${template.name} copia`, body: template.body, createdAt: todayIso() }).then(() => loadAll('Mensaje duplicado.'))}><Copy size={16} />Duplicar</SecondaryButton><SecondaryButton onClick={() => deleteTemplate(template.id)}><Trash2 size={16} />Eliminar</SecondaryButton></div></article>;
+                return <article key={template.id} className="rounded-3xl border border-slate-100 p-4"><h3 className="font-black">{template.name}</h3><p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{previewContact ? personalizeMessage(template.body, previewContact, listNames(previewContact.listIds).split(', ')[0] || '', messageContext()) : template.body}</p><div className="mt-3 flex flex-wrap gap-2"><SecondaryButton onClick={() => { setTemplateForm(template); setEditingTemplateId(template.id!); }}><Edit3 size={16} />Editar</SecondaryButton><SecondaryButton onClick={() => db.templates.add({ name: `${template.name} copia`, body: template.body, createdAt: todayIso() }).then(() => loadAll('Mensaje duplicado.'))}><Copy size={16} />Duplicar</SecondaryButton><SecondaryButton onClick={() => deleteTemplate(template.id)}><Trash2 size={16} />Eliminar</SecondaryButton></div></article>;
               })}
             </div>
           ) : null}
@@ -1184,14 +1355,48 @@ function App() {
     </div>
   );
 
+  const renderEntry = () => (
+    <div className="theme-golden min-h-screen bg-black px-5 py-[calc(env(safe-area-inset-top)+1.25rem)] text-white">
+      <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md flex-col justify-center">
+        <div className="mb-8 overflow-hidden rounded-[2rem] bg-black">
+          <img src={logoSrc} alt="Golden Team" className="mx-auto w-full max-w-sm object-contain mix-blend-screen" />
+        </div>
+        <div className="text-center">
+          <p className="text-sm font-bold uppercase tracking-[0.25em] text-gold">Acceso interno del equipo</p>
+          <h1 className="mt-3 text-4xl font-black tracking-normal">Golden Team Connect</h1>
+          <p className="mt-2 text-white/70">Organiza. Da seguimiento. Mantente conectado.</p>
+          <p className="mt-2 text-sm text-white/45">Herramienta interna de Golden Team.</p>
+        </div>
+        <form className="mt-8 grid gap-4" onSubmit={submitEntry}>
+          <Field label="Nombre"><input className="input border-white/10 bg-white/95 text-black" value={entryName} onChange={(event) => setEntryName(event.target.value)} placeholder="Ayhann" /></Field>
+          <Field label="Feel Great Link"><input className="input border-white/10 bg-white/95 text-black" value={entryLink} onChange={(event) => setEntryLink(event.target.value)} placeholder="https://..." /></Field>
+          <Field label="Password del equipo">
+            <div className="flex gap-2">
+              <input className="input border-white/10 bg-white/95 text-black" type={showPassword ? 'text' : 'password'} value={entryPassword} onChange={(event) => setEntryPassword(event.target.value)} />
+              <IconButton label={showPassword ? 'Ocultar password' : 'Mostrar password'} onClick={() => setShowPassword((current) => !current)}>{showPassword ? <EyeOff /> : <Eye />}</IconButton>
+            </div>
+          </Field>
+          {entryError ? <p className="rounded-2xl border border-red-400/40 bg-red-500/15 p-3 text-sm font-bold text-red-100">{entryError}</p> : null}
+          <PrimaryButton type="submit" className="bg-gold text-black hover:bg-goldDark"><Check size={18} />Entrar</PrimaryButton>
+          <p className="text-center text-xs leading-relaxed text-white/45">Esta es una puerta de acceso simple local, no autenticación profesional. No usa backend.</p>
+        </form>
+      </div>
+    </div>
+  );
+
   return (
-    <div className="min-h-screen bg-soft text-ink lg:flex">
+    !ready ? (
+      <div className="theme-golden grid min-h-screen place-items-center bg-black text-white">Cargando Golden Team Connect...</div>
+    ) : !settings.sessionActive ? (
+      renderEntry()
+    ) : (
+    <div className={`theme-${settings.visualTheme || 'golden'} min-h-screen bg-soft text-ink lg:flex`}>
       {nav}
       <main className="w-full px-4 pb-[calc(env(safe-area-inset-bottom)+6rem)] pt-[calc(env(safe-area-inset-top)+1rem)] lg:px-8 lg:pb-8">
         <header className="mx-auto mb-5 flex max-w-6xl items-center justify-between gap-3">
           <div className="min-w-0 lg:hidden">
             <p className="text-xs font-bold text-brand">Golden Team Connect</p>
-            <p className="truncate text-sm text-slate-500">Herramienta independiente para organizacion y seguimiento</p>
+            <p className="truncate text-sm text-slate-500">Organiza. Da seguimiento. Mantente conectado.</p>
           </div>
           <div className="hidden lg:block">
             <p className="text-sm font-bold text-brand">Golden Team Connect</p>
@@ -1199,6 +1404,7 @@ function App() {
           </div>
           <div className="flex items-center gap-2">
             <SecondaryButton onClick={() => setLaMode(true)} className="hidden sm:inline-flex"><MapPin size={17} />Modo LA Fitness</SecondaryButton>
+            <IconButton label="Perfil" onClick={() => setProfileOpen(true)}><User /></IconButton>
             <IconButton label="Configuracion" onClick={() => setConfigOpen(true)}><Settings /></IconButton>
           </div>
         </header>
@@ -1209,8 +1415,10 @@ function App() {
         {active === 'seguimiento' ? renderFollowUp() : null}
       </main>
       {configOpen ? renderConfig() : null}
+      {profileOpen ? renderProfile() : null}
       {laMode ? renderLaMode() : null}
     </div>
+    )
   );
 }
 

@@ -1,12 +1,26 @@
 import type { Contact } from '../types';
 
-export function personalizeMessage(template: string, contact: Contact, listName = ''): string {
+export interface MessageContext {
+  userName?: string;
+  feelGreatLink?: string;
+}
+
+export function personalizeMessage(template: string, contact: Contact, listName = '', context: MessageContext = {}): string {
   return template
     .replaceAll('{{nombre}}', contact.firstName)
     .replaceAll('{{apellido}}', contact.lastName)
     .replaceAll('{{pais}}', contact.country)
     .replaceAll('{{categoria}}', contact.category)
-    .replaceAll('{{lista}}', listName);
+    .replaceAll('{{lista}}', listName)
+    .replaceAll('{{nombre_usuario}}', context.userName || '')
+    .replaceAll('{{feelgreat_link}}', context.feelGreatLink || '')
+    .replaceAll('{{nombre_contacto}}', contact.firstName)
+    .replaceAll('{{apellido_contacto}}', contact.lastName)
+    .replaceAll('{{pais_contacto}}', contact.country);
+}
+
+export function messageNeedsFeelGreatLink(message: string): boolean {
+  return message.includes('{{feelgreat_link}}');
 }
 
 export function smsSegments(message: string): number {

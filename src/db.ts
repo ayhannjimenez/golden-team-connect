@@ -27,6 +27,9 @@ export const db = new LocalDatabase();
 export const defaultSettings: AppSettings = {
   id: 'main',
   ownerName: '',
+  feelGreatLink: '',
+  sessionActive: false,
+  visualTheme: 'golden',
   personalNumber: '14075063846',
   defaultCountryCode: '1',
   defaultCountry: 'Estados Unidos',
@@ -40,7 +43,11 @@ export const defaultSettings: AppSettings = {
 
 export async function ensureSettings(): Promise<AppSettings> {
   const existing = await db.settings.get('main');
-  if (existing) return existing;
+  if (existing) {
+    const merged = { ...defaultSettings, ...existing };
+    if (JSON.stringify(merged) !== JSON.stringify(existing)) await db.settings.put(merged);
+    return merged;
+  }
   await db.settings.put(defaultSettings);
   return defaultSettings;
 }

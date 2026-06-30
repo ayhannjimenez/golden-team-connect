@@ -2,6 +2,7 @@ export type Category = 'Miembro' | 'Cliente' | 'Distribuidor' | 'Lider' | 'Prosp
 export type ContactStatus = 'Activo' | 'Pausado' | 'Dado de baja';
 export type Channel = 'WhatsApp' | 'SMS' | 'Ambos';
 export type QueueStatus = 'Pendiente' | 'Abierto' | 'Enviado' | 'Omitido' | 'Fallido';
+export type VisualTheme = 'golden' | 'classic' | 'emerald' | 'burgundy';
 
 export interface Contact {
   id?: number;
@@ -79,6 +80,9 @@ export interface QueueItem {
 export interface AppSettings {
   id: 'main';
   ownerName: string;
+  feelGreatLink?: string;
+  sessionActive?: boolean;
+  visualTheme?: VisualTheme;
   personalNumber: string;
   defaultCountryCode: string;
   defaultCountry: string;
