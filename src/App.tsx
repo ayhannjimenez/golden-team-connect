@@ -1812,15 +1812,15 @@ function App() {
   const renderEntry = () => (
     <div className="theme-golden min-h-screen bg-black px-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pt-[calc(env(safe-area-inset-top)+1.5rem)] text-white">
       <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md flex-col justify-center">
-        <div className="mb-10 text-center">
-          <div className="mb-7 select-none">
-            <p className="text-[2.65rem] font-black leading-none tracking-[0.26em] text-white">UNICITY</p>
-            <p className="mt-1 text-[4.4rem] font-black italic leading-none tracking-normal text-gold">GT</p>
-          </div>
-          <p className="text-xs font-bold uppercase tracking-[0.28em] text-gold/90">Acceso interno del equipo</p>
-          <h1 className="mt-4 text-4xl font-black leading-tight tracking-normal">Golden Team Connect</h1>
-          <p className="mt-3 text-base text-white/72">Organiza. Da seguimiento. Mantente conectado.</p>
-          <p className="mt-2 text-sm text-white/45">Herramienta interna de Golden Team.</p>
+        <div className="mb-7 text-center">
+          <img
+            src={logoSrc}
+            alt="Golden Team"
+            className="mx-auto mb-6 w-full max-w-[18rem] object-contain mix-blend-screen [filter:brightness(1.04)_contrast(1.05)]"
+          />
+          <p className="text-[0.68rem] font-bold uppercase tracking-[0.26em] text-gold/90">Acceso interno del equipo</p>
+          <h1 className="mt-3 text-[2.15rem] font-black leading-tight tracking-normal">Golden Team Connect</h1>
+          <p className="mt-2 text-[0.98rem] leading-relaxed text-white/72">Organiza. Da seguimiento. Mantente conectado.</p>
         </div>
         <form className="grid gap-4" onSubmit={submitEntry}>
           <Field label="Nombre"><input className="input border-white/12 bg-white/[0.97] text-black shadow-none" value={entryName} onChange={(event) => setEntryName(event.target.value)} placeholder="Ayhann" /></Field>
