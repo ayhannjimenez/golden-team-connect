@@ -3,6 +3,7 @@ import type { Contact, QueueItem } from '../types';
 import { GOLDEN_TEAM_ACCESS_CODE, isValidAccessCode, normalizeAccessCode } from '../accessConfig';
 import { validateBackup } from '../utils/backup';
 import { exportContactsCsv, parseContactsCsv } from '../utils/csv';
+import { buildFirst30DayTasks, buildRenewalTask, currentProgramDay, defaultWeeklyEvents, first30DaySteps, isBusinessEligible, parsePastedProspects, renewalMessageForPurchaseType } from '../utils/followup';
 import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, messageNeedsFeelGreatLink, personalizeMessage } from '../utils/messages';
 import { isDuplicatePhone, normalizePhone } from '../utils/phone';
 
@@ -69,7 +70,61 @@ describe('listas y mensajes', () => {
   it('personaliza variables', () => {
     expect(personalizeMessage('Hola {{nombre}} de {{pais}}', contact, 'Clientes')).toBe('Hola Maria de Estados Unidos');
     expect(personalizeMessage('Hola {{nombre_contacto}}, soy {{nombre_usuario}}: {{feelgreat_link}}', contact, 'Clientes', { userName: 'Ayhann', feelGreatLink: 'https://ufeelgreat.com/c/123456' })).toBe('Hola Maria, soy Ayhann: https://ufeelgreat.com/c/123456');
+    expect(personalizeMessage('{{ubicacion}} {{enlace_evento}}', contact, 'Clientes', { location: 'Junction', eventLink: 'https://zoom.test' })).toBe('Junction https://zoom.test');
     expect(messageNeedsFeelGreatLink('Mira {{feelgreat_link}}')).toBe(true);
+  });
+});
+
+describe('miembros y programa de 30 dias', () => {
+  const member = {
+    id: 7,
+    firstName: 'Ana',
+    lastName: 'Rivera',
+    phone: '13215550001',
+    countryCode: '1',
+    country: 'Estados Unidos',
+    purchaseDate: '2026-06-01',
+    protocolStartDate: '2026-06-10',
+    preferredChannel: 'WhatsApp' as const,
+    purchaseType: 'Compra única' as const,
+    interest: 'Interesado en negocio' as const,
+    programActive: true,
+    programStatus: 'Activo' as const,
+    createdAt: '2026-06-01T00:00:00.000Z'
+  };
+
+  it('genera todas las tareas del programa desde la fecha de inicio', () => {
+    const tasks = buildFirst30DayTasks(member, 'https://ufeelgreat.com/c/123456');
+    expect(tasks).toHaveLength(first30DaySteps.length);
+    expect(tasks[0].dueDate).toBe('2026-06-10');
+    expect(tasks.find((task) => task.programDay === 30)?.dueDate).toBe('2026-07-10');
+    expect(tasks.every((task) => task.dueTime === '10:00')).toBe(true);
+  });
+
+  it('calcula dia actual y mensaje segun tipo de compra', () => {
+    expect(currentProgramDay('2026-06-10', new Date('2026-06-18T12:00:00.000Z'))).toBe(8);
+    expect(renewalMessageForPurchaseType('Autosuscripción')).toContain('autosuscripción');
+    expect(renewalMessageForPurchaseType('Compra única', 'https://ufeelgreat.com/c/123456')).toContain('https://ufeelgreat.com/c/123456');
+    expect(renewalMessageForPurchaseType('No sé')).toContain('verificarlo');
+  });
+
+  it('crea recordatorio cinco dias antes y valida elegibilidad semanal', () => {
+    const renewal = buildRenewalTask({ ...member, nextOrderDate: '2026-07-15' });
+    expect(renewal?.dueDate).toBe('2026-07-10');
+    expect(isBusinessEligible(member)).toBe(true);
+    expect(isBusinessEligible({ interest: 'Solo protocolo' })).toBe(false);
+    expect(defaultWeeklyEvents).toHaveLength(4);
+    expect(defaultWeeklyEvents[0].link).toContain('88673512174');
+  });
+});
+
+describe('prospectos LA Fitness', () => {
+  it('pega lista, normaliza telefonos y detecta duplicados', () => {
+    const parsed = parsePastedProspects('María López, 4075551234\nJohn Smith, 3215559876\nSin telefono', ['13215559876'], '1');
+    expect(parsed.contacts).toHaveLength(1);
+    expect(parsed.contacts[0].phone).toBe('14075551234');
+    expect(parsed.duplicates).toHaveLength(1);
+    expect(parsed.invalid).toHaveLength(1);
   });
 });
 
@@ -137,6 +192,9 @@ describe('csv, backup, imagen y pwa', () => {
       templates: [],
       campaigns: [],
       queue: [],
+      members: [],
+      tasks: [],
+      weeklyEvents: [],
       settings: {
         id: 'main',
         ownerName: '',

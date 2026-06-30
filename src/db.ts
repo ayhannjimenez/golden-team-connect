@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { AppSettings, Campaign, Contact, InternalList, MessageTemplate, QueueItem } from './types';
+import type { AppSettings, Campaign, Contact, FollowUpTask, InternalList, Member, MessageTemplate, QueueItem, WeeklyEvent } from './types';
 
 export class LocalDatabase extends Dexie {
   contacts!: Table<Contact, number>;
@@ -7,6 +7,9 @@ export class LocalDatabase extends Dexie {
   templates!: Table<MessageTemplate, number>;
   campaigns!: Table<Campaign, number>;
   queue!: Table<QueueItem, number>;
+  members!: Table<Member, number>;
+  tasks!: Table<FollowUpTask, number>;
+  weeklyEvents!: Table<WeeklyEvent, number>;
   settings!: Table<AppSettings, string>;
 
   constructor() {
@@ -17,6 +20,17 @@ export class LocalDatabase extends Dexie {
       templates: '++id, name, demo',
       campaigns: '++id, name, createdAt, demo',
       queue: '++id, campaignId, contactId, status',
+      settings: 'id'
+    });
+    this.version(2).stores({
+      contacts: '++id, &phone, firstName, lastName, status, category, preferredChannel, *listIds, demo',
+      lists: '++id, name, demo',
+      templates: '++id, name, demo',
+      campaigns: '++id, name, createdAt, demo',
+      queue: '++id, campaignId, contactId, status',
+      members: '++id, &phone, firstName, lastName, programStatus, interest, protocolStartDate, nextOrderDate',
+      tasks: '++id, memberId, contactId, queueItemId, kind, status, dueDate, sourceKey',
+      weeklyEvents: '++id, name, weekday, active',
       settings: 'id'
     });
   }
@@ -53,8 +67,8 @@ export async function ensureSettings(): Promise<AppSettings> {
 }
 
 export async function clearAllData(): Promise<void> {
-  await db.transaction('rw', [db.contacts, db.lists, db.templates, db.campaigns, db.queue, db.settings], async () => {
-    await Promise.all([db.contacts.clear(), db.lists.clear(), db.templates.clear(), db.campaigns.clear(), db.queue.clear()]);
+  await db.transaction('rw', [db.contacts, db.lists, db.templates, db.campaigns, db.queue, db.members, db.tasks, db.weeklyEvents, db.settings], async () => {
+    await Promise.all([db.contacts.clear(), db.lists.clear(), db.templates.clear(), db.campaigns.clear(), db.queue.clear(), db.members.clear(), db.tasks.clear(), db.weeklyEvents.clear()]);
     await db.settings.put({ ...defaultSettings, demoSeeded: false });
   });
 }

@@ -3,6 +3,8 @@ import type { Contact } from '../types';
 export interface MessageContext {
   userName?: string;
   feelGreatLink?: string;
+  location?: string;
+  eventLink?: string;
 }
 
 export function personalizeMessage(template: string, contact: Contact, listName = '', context: MessageContext = {}): string {
@@ -14,6 +16,8 @@ export function personalizeMessage(template: string, contact: Contact, listName 
     .replaceAll('{{lista}}', listName)
     .replaceAll('{{nombre_usuario}}', context.userName || '')
     .replaceAll('{{feelgreat_link}}', context.feelGreatLink || '')
+    .replaceAll('{{ubicacion}}', context.location || '')
+    .replaceAll('{{enlace_evento}}', context.eventLink || '')
     .replaceAll('{{nombre_contacto}}', contact.firstName)
     .replaceAll('{{apellido_contacto}}', contact.lastName)
     .replaceAll('{{pais_contacto}}', contact.country);

@@ -16,5 +16,5 @@ export function validateBackup(input: unknown): input is BackupFile {
 }
 
 export function backupSummary(backup: BackupFile): string {
-  return `${backup.contacts.length} contactos, ${backup.lists.length} listas, ${backup.templates.length} plantillas, ${backup.campaigns.length} campanas`;
+  return `${backup.contacts.length} contactos, ${backup.members?.length || 0} miembros, ${backup.tasks?.length || 0} tareas, ${backup.campaigns.length} campanas`;
 }

@@ -4,8 +4,11 @@ import { normalizePhone } from './phone';
 
 export interface CsvImportRow {
   nombre?: string;
+  first_name?: string;
   apellido?: string;
+  last_name?: string;
   telefono?: string;
+  phone?: string;
   codigo_pais?: string;
   pais?: string;
   categoria?: string;
@@ -13,6 +16,13 @@ export interface CsvImportRow {
   notas?: string;
   consentimiento?: string;
   canal_preferido?: string;
+  email?: string;
+  ubicacion?: string;
+  location?: string;
+  idioma?: string;
+  language?: string;
+  fecha?: string;
+  date?: string;
 }
 
 export interface CsvPreview {
@@ -32,8 +42,8 @@ export function parseContactsCsv(csv: string, existingPhones: string[] = [], def
   const duplicates: CsvPreview['duplicates'] = [];
 
   parsed.data.forEach((row) => {
-    const name = row.nombre?.trim();
-    const phonePreview = normalizePhone(row.telefono || '', row.codigo_pais || defaultCountryCode);
+    const name = (row.nombre || row.first_name || '').trim();
+    const phonePreview = normalizePhone(row.telefono || row.phone || '', row.codigo_pais || defaultCountryCode);
     if (!name) {
       invalid.push({ row, reason: 'Falta el nombre.' });
       return;
@@ -60,14 +70,15 @@ export function csvRowToContact(
   defaultCountry = 'Estados Unidos'
 ): Contact {
   return {
-    firstName: row.nombre?.trim() || '',
-    lastName: row.apellido?.trim() || '',
+    firstName: (row.nombre || row.first_name || '').trim(),
+    lastName: (row.apellido || row.last_name || '').trim(),
     phone: row.normalizedPhone,
     countryCode: row.codigo_pais?.trim() || defaultCountryCode,
     country: row.pais?.trim() || defaultCountry,
-    category: allowedCategories.includes(row.categoria || '') ? (row.categoria as Contact['category']) : 'Otro',
+    email: row.email || '',
+    category: allowedCategories.includes(row.categoria || '') ? (row.categoria as Contact['category']) : 'Prospecto',
     listIds,
-    tags: [],
+    tags: [row.ubicacion || row.location ? `Gimnasio:${row.ubicacion || row.location}` : '', row.idioma || row.language ? `Idioma:${row.idioma || row.language}` : '', 'Primer mensaje pendiente'].filter(Boolean),
     notes: row.notas || '',
     createdAt: new Date().toISOString(),
     status: 'Activo',

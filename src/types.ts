@@ -3,6 +3,69 @@ export type ContactStatus = 'Activo' | 'Pausado' | 'Dado de baja';
 export type Channel = 'WhatsApp' | 'SMS' | 'Ambos';
 export type QueueStatus = 'Pendiente' | 'Abierto' | 'Enviado' | 'Omitido' | 'Fallido';
 export type VisualTheme = 'golden' | 'classic' | 'emerald' | 'burgundy';
+export type MemberPurchaseType = 'Autosuscripción' | 'Compra única' | 'No sé';
+export type MemberInterest = 'Solo protocolo' | 'Interesado en negocio' | 'Distribuidor activo';
+export type MemberProgramStatus = 'Sin iniciar' | 'Activo' | 'Pausado' | 'Completado';
+export type TaskKind = 'Miembro' | 'Renovación' | 'Reunión' | 'LA Fitness';
+export type TaskStatus = 'Pendiente' | 'Completada' | 'Pospuesta';
+
+export interface Member {
+  id?: number;
+  firstName: string;
+  lastName?: string;
+  phone: string;
+  countryCode: string;
+  country?: string;
+  email?: string;
+  purchaseDate: string;
+  estimatedDeliveryDate?: string;
+  protocolStartDate?: string;
+  preferredChannel: Exclude<Channel, 'Ambos'>;
+  purchaseType: MemberPurchaseType;
+  interest: MemberInterest;
+  notes?: string;
+  programActive: boolean;
+  programStatus: MemberProgramStatus;
+  weeklyEventsActive?: boolean;
+  nextOrderDate?: string;
+  createdAt: string;
+  convertedFromContactId?: number;
+}
+
+export interface FollowUpTask {
+  id?: number;
+  memberId?: number;
+  contactId?: number;
+  queueItemId?: number;
+  kind: TaskKind;
+  program: string;
+  title: string;
+  contactName: string;
+  phone: string;
+  channel: Exclude<Channel, 'Ambos'> | 'No definido';
+  dueDate: string;
+  dueTime: string;
+  programDay?: number;
+  message: string;
+  status: TaskStatus;
+  completedAt?: string;
+  completedChannel?: Exclude<Channel, 'Ambos'>;
+  notes?: string;
+  createdAt: string;
+  sourceKey?: string;
+}
+
+export interface WeeklyEvent {
+  id?: number;
+  name: string;
+  weekday: number;
+  eventTime: string;
+  reminderTime: string;
+  link: string;
+  message: string;
+  active: boolean;
+  updatedAt: string;
+}
 
 export interface Contact {
   id?: number;
@@ -108,5 +171,8 @@ export interface BackupFile {
   templates: MessageTemplate[];
   campaigns: Campaign[];
   queue: QueueItem[];
+  members?: Member[];
+  tasks?: FollowUpTask[];
+  weeklyEvents?: WeeklyEvent[];
   settings: AppSettings;
 }
