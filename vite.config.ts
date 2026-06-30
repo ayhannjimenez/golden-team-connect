@@ -16,7 +16,7 @@ export default defineConfig({
         short_name: 'Golden Team',
         description: 'Herramienta independiente para organizacion y seguimiento.',
         lang: 'es',
-        theme_color: '#08080a',
+        theme_color: '#000000',
         background_color: '#000000',
         display: 'standalone',
         display_override: ['window-controls-overlay', 'standalone', 'minimal-ui'],

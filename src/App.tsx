@@ -96,6 +96,7 @@ const memberInterests: MemberInterest[] = ['Solo protocolo', 'Interesado en nego
 const taskGroups: TaskGroup[] = ['Hoy', 'Vencidas', 'Próximas', 'Completadas'];
 const taskFilters: Array<'Todas' | TaskKind> = ['Todas', 'Miembro', 'Renovación', 'Reunión', 'LA Fitness'];
 const logoSrc = `${import.meta.env.BASE_URL}golden-team-logo.jpeg`;
+const entryLogoSrc = `${import.meta.env.BASE_URL}golden-team-logo-transparent.png`;
 const themeOptions: Array<{ id: VisualTheme; label: string; detail: string }> = [
   { id: 'golden', label: 'Golden Team', detail: 'Negro, blanco y dorado' },
   { id: 'classic', label: 'Classic Blue', detail: 'Azul marino, azul claro y blanco' },
@@ -1810,19 +1811,19 @@ function App() {
   );
 
   const renderEntry = () => (
-    <div className="theme-golden min-h-screen bg-black px-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] pt-[calc(env(safe-area-inset-top)+1.5rem)] text-white">
-      <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md flex-col justify-center">
-        <div className="mb-7 text-center">
+    <div className="theme-golden min-h-screen min-h-[100svh] min-h-[100dvh] bg-[#000000] px-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] pt-[calc(env(safe-area-inset-top)+1.25rem)] text-white">
+      <div className="mx-auto flex min-h-[calc(100vh-2.5rem)] min-h-[calc(100svh-2.5rem)] min-h-[calc(100dvh-2.5rem)] max-w-md flex-col justify-center bg-[#000000]">
+        <div className="mb-6 text-center">
           <img
-            src={logoSrc}
+            src={entryLogoSrc}
             alt="Golden Team"
-            className="mx-auto mb-6 w-full max-w-[18rem] object-contain mix-blend-screen [filter:brightness(1.04)_contrast(1.05)]"
+            className="mx-auto mb-5 h-auto w-[82vw] max-w-[20rem] object-contain sm:max-w-[22rem]"
           />
-          <p className="text-[0.68rem] font-bold uppercase tracking-[0.26em] text-gold/90">Acceso interno del equipo</p>
-          <h1 className="mt-3 text-[2.15rem] font-black leading-tight tracking-normal">Golden Team Connect</h1>
-          <p className="mt-2 text-[0.98rem] leading-relaxed text-white/72">Organiza. Da seguimiento. Mantente conectado.</p>
+          <p className="text-[0.66rem] font-bold uppercase tracking-[0.24em] text-gold/90">Acceso interno del equipo</p>
+          <h1 className="mt-2.5 text-[2rem] font-black leading-tight tracking-normal sm:text-[2.15rem]">Golden Team Connect</h1>
+          <p className="mt-1.5 text-[0.95rem] leading-relaxed text-white/72">Organiza. Da seguimiento. Mantente conectado.</p>
         </div>
-        <form className="grid gap-4" onSubmit={submitEntry}>
+        <form className="grid gap-3.5" onSubmit={submitEntry}>
           <Field label="Nombre"><input className="input border-white/12 bg-white/[0.97] text-black shadow-none" value={entryName} onChange={(event) => setEntryName(event.target.value)} placeholder="Ayhann" /></Field>
           <Field label="Feel Great Link"><input className="input border-white/12 bg-white/[0.97] text-black shadow-none" value={entryLink} onChange={(event) => setEntryLink(event.target.value)} placeholder="https://..." /></Field>
           <Field label="Código de acceso">
