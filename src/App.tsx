@@ -39,6 +39,7 @@ import {
 import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 import { clearAllData, db, defaultSettings, ensureSettings } from './db';
 import { removeDemoData, seedDemoData } from './demoData';
+import { isValidAccessCode, normalizeAccessCode } from './accessConfig';
 import type { AppSettings, Campaign, CampaignImage, CampaignPreview, Channel, Contact, ContactStatus, InternalList, MessageTemplate, QueueItem, QueueStatus, VisualTheme } from './types';
 import { backupSummary, validateBackup } from './utils/backup';
 import { csvRowToContact, exportContactsCsv, parseContactsCsv } from './utils/csv';
@@ -88,7 +89,6 @@ const businessStatuses: BusinessStatus[] = ['Nuevo', 'Mensaje pendiente', 'Conta
 const peopleFilters: PeopleFilter[] = ['Todos', 'Nuevos', 'Contactados', 'Respondieron', 'Seguimiento', 'Cerrados'];
 const laLocations = ['Junction', 'Maitland', 'Otra ubicacion'];
 const languages = ['Espanol', 'Ingles'];
-const TEAM_PASSWORD = 'GoldenTeam2026';
 const logoSrc = `${import.meta.env.BASE_URL}golden-team-logo.jpeg`;
 const themeOptions: Array<{ id: VisualTheme; label: string; detail: string }> = [
   { id: 'golden', label: 'Golden Team', detail: 'Negro, blanco y dorado' },
@@ -265,9 +265,9 @@ function App() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [entryName, setEntryName] = useState('');
   const [entryLink, setEntryLink] = useState('');
-  const [entryPassword, setEntryPassword] = useState('');
+  const [entryAccessCode, setEntryAccessCode] = useState('');
   const [entryError, setEntryError] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+  const [showAccessCode, setShowAccessCode] = useState(false);
   const [quickLinkOpen, setQuickLinkOpen] = useState(false);
   const [laMode, setLaMode] = useState(false);
   const [contactForm, setContactForm] = useState<Contact>(blankContact);
@@ -321,6 +321,10 @@ function App() {
     setTemplates(loadedTemplates);
     setCampaigns(loadedCampaigns);
     setQueue(loadedQueue);
+    if (!loadedSettings.sessionActive) {
+      setEntryName((current) => current || loadedSettings.ownerName || '');
+      setEntryLink((current) => current || loadedSettings.feelGreatLink || '');
+    }
     setReady(true);
     if (!activeCampaignId && loadedCampaigns[0]?.id) setActiveCampaignId(loadedCampaigns[0].id);
     if (message) setNotice(message);
@@ -453,10 +457,17 @@ function App() {
     const link = normalizeFeelGreatLink(entryLink);
     if (!name) return setEntryError('Escribe tu nombre.');
     if (!isValidFeelGreatLink(link)) return setEntryError('Revisa que hayas pegado tu enlace completo.');
-    if (entryPassword !== TEAM_PASSWORD) return setEntryError('Contraseña incorrecta');
+    if (!isValidAccessCode(entryAccessCode)) return setEntryError('Código incorrecto. Verifica e intenta nuevamente.');
     await saveProfilePatch({ ownerName: name, feelGreatLink: link, sessionActive: true, visualTheme: settings.visualTheme || 'golden' }, 'Bienvenido a Golden Team Connect.');
-    setEntryPassword('');
+    setEntryAccessCode('');
     setEntryError('');
+  }
+
+  async function closeSession() {
+    if (!confirm('Cerrar sesión? Tus datos guardados permanecerán en este dispositivo.')) return;
+    await saveProfilePatch({ sessionActive: false }, 'Sesión cerrada.');
+    setEntryAccessCode('');
+    setProfileOpen(false);
   }
 
   async function copyFeelGreatLink() {
@@ -1226,7 +1237,7 @@ function App() {
             <div className="mt-4">{renderThemePicker()}</div>
           </Card>
 
-          <SecondaryButton onClick={() => saveProfilePatch({ sessionActive: false }, 'Sesión cerrada.')}><X size={17} />Cerrar sesión</SecondaryButton>
+          <SecondaryButton onClick={closeSession}><X size={17} />Cerrar sesión</SecondaryButton>
         </div>
       </div>
     </div>
@@ -1370,11 +1381,20 @@ function App() {
         <form className="mt-8 grid gap-4" onSubmit={submitEntry}>
           <Field label="Nombre"><input className="input border-white/10 bg-white/95 text-black" value={entryName} onChange={(event) => setEntryName(event.target.value)} placeholder="Ayhann" /></Field>
           <Field label="Feel Great Link"><input className="input border-white/10 bg-white/95 text-black" value={entryLink} onChange={(event) => setEntryLink(event.target.value)} placeholder="https://..." /></Field>
-          <Field label="Password del equipo">
+          <Field label="Código de acceso">
             <div className="flex gap-2">
-              <input className="input border-white/10 bg-white/95 text-black" type={showPassword ? 'text' : 'password'} value={entryPassword} onChange={(event) => setEntryPassword(event.target.value)} />
-              <IconButton label={showPassword ? 'Ocultar password' : 'Mostrar password'} onClick={() => setShowPassword((current) => !current)}>{showPassword ? <EyeOff /> : <Eye />}</IconButton>
+              <input
+                className="input border-white/10 bg-white/95 text-black"
+                type={showAccessCode ? 'text' : 'password'}
+                value={entryAccessCode}
+                onChange={(event) => setEntryAccessCode(normalizeAccessCode(event.target.value))}
+                placeholder="Código de acceso"
+                autoCapitalize="characters"
+                spellCheck={false}
+              />
+              <IconButton label={showAccessCode ? 'Ocultar código de acceso' : 'Mostrar código de acceso'} onClick={() => setShowAccessCode((current) => !current)}>{showAccessCode ? <EyeOff /> : <Eye />}</IconButton>
             </div>
+            <span className="text-xs font-medium text-white/55">Ingresa el código proporcionado por Golden Team.</span>
           </Field>
           {entryError ? <p className="rounded-2xl border border-red-400/40 bg-red-500/15 p-3 text-sm font-bold text-red-100">{entryError}</p> : null}
           <PrimaryButton type="submit" className="bg-gold text-black hover:bg-goldDark"><Check size={18} />Entrar</PrimaryButton>

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Contact, QueueItem } from '../types';
+import { GOLDEN_TEAM_ACCESS_CODE, isValidAccessCode, normalizeAccessCode } from '../accessConfig';
 import { validateBackup } from '../utils/backup';
 import { exportContactsCsv, parseContactsCsv } from '../utils/csv';
 import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, messageNeedsFeelGreatLink, personalizeMessage } from '../utils/messages';
@@ -21,6 +22,22 @@ const contact: Contact = {
   consent: true,
   consentDate: '2026-01-01T00:00:00.000Z'
 };
+
+describe('codigo de acceso Golden Team', () => {
+  it('acepta el codigo oficial correcto', () => {
+    expect(GOLDEN_TEAM_ACCESS_CODE).toBe('K7M9Q4TX8R');
+    expect(isValidAccessCode('K7M9Q4TX8R')).toBe(true);
+  });
+
+  it('rechaza codigo incorrecto', () => {
+    expect(isValidAccessCode('GoldenTeam2026')).toBe(false);
+  });
+
+  it('acepta codigo en minusculas y con espacios accidentales', () => {
+    expect(normalizeAccessCode('k7m9 q4tx8r')).toBe('K7M9Q4TX8R');
+    expect(isValidAccessCode('k7m9 q4tx8r')).toBe(true);
+  });
+});
 
 describe('contactos y telefonos', () => {
   it('crea una forma valida para guardar contacto', () => {
