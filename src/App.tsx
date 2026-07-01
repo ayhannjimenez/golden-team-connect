@@ -1,149 +1,123 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 import {
-  ArrowRight,
   Bell,
-  CalendarClock,
+  Camera,
   Check,
   ChevronLeft,
-  ChevronRight,
-  Circle,
-  CircleAlert,
-  Clipboard,
   Copy,
-  Database,
   Download,
-  Edit3,
   ExternalLink,
   Eye,
   EyeOff,
   FileImage,
   Home,
-  Import,
-  MapPin,
+  ImagePlus,
+  Library,
+  LogOut,
   MessageCircle,
   Phone,
+  Play,
   Plus,
-  RefreshCw,
-  Search,
   Send,
-  Settings,
   Share2,
-  Smartphone,
   Trash2,
   Upload,
-  User,
   Users,
   X
 } from 'lucide-react';
-import type { ChangeEvent, FormEvent, ReactNode } from 'react';
-import { clearAllData, db, defaultSettings, ensureSettings } from './db';
+import { db, defaultSettings, ensureSettings } from './db';
 import { isValidAccessCode, normalizeAccessCode } from './accessConfig';
-import type { AppSettings, Campaign, CampaignImage, CampaignPreview, Channel, Contact, ContactStatus, FollowUpTask, InternalList, Member, MemberInterest, MemberPurchaseType, MessageTemplate, QueueItem, QueueStatus, TaskKind, VisualTheme, WeeklyEvent } from './types';
-import { backupSummary, validateBackup } from './utils/backup';
-import { csvRowToContact, exportContactsCsv, parseContactsCsv } from './utils/csv';
-import { buildFirst30DayTasks, buildRenewalTask, currentProgramDay, defaultWeeklyEvents, isBusinessEligible, memberName, parsePastedProspects } from './utils/followup';
-import { compressImage, shareImage } from './utils/image';
-import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, messageNeedsFeelGreatLink, personalizeMessage, smsSegments } from './utils/messages';
+import type { AppLanguage, AppSettings, Campaign, Channel, Contact, ContactLanguage, FollowUpTask, InternalList, MediaAsset, Member, QueueItem, QueueStatus, WeeklyEvent } from './types';
+import { exportContactsCsv, parseContactsCsv, csvRowToContact } from './utils/csv';
+import { buildFirst30DayTasks, currentProgramDay, defaultWeeklyEvents, memberName, parsePastedProspects } from './utils/followup';
+import { compressImage, fileToDataUrl, shareImage } from './utils/image';
+import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, personalizeMessage } from './utils/messages';
 import { isDuplicatePhone, normalizePhone } from './utils/phone';
 
-type MainSection = 'inicio' | 'miembros' | 'laFitness' | 'tareas';
-type ConfigPanel = 'perfil' | 'mensajesMiembros' | 'mensajesLa' | 'semanal' | 'ubicaciones' | 'importar' | 'copias' | 'informacion';
-type SendStep = 1 | 2 | 3;
-type PeopleFilter = 'Todos' | 'Nuevos' | 'Contactados' | 'Respondieron' | 'Seguimiento' | 'Cerrados';
-type BusinessStatus =
-  | 'Nuevo'
-  | 'Mensaje pendiente'
-  | 'Contactado'
-  | 'Respondio'
-  | 'Interesado'
-  | 'Requiere llamada'
-  | 'Seguimiento'
-  | 'Cerrado'
-  | 'No respondio'
-  | 'No interesado'
-  | 'Dado de baja';
-
+type MainSection = 'inicio' | 'difusion' | 'seguimiento' | 'tareas';
 type TaskGroup = 'Hoy' | 'Vencidas' | 'Próximas' | 'Completadas';
+type TaskFilter = 'Todas' | 'Difusión' | 'Seguimiento' | 'Reuniones';
+type Audience = ContactLanguage | 'Manual';
 
-const mainSections: Array<{ id: MainSection; label: string; icon: ReactNode }> = [
-  { id: 'inicio', label: 'Inicio', icon: <Home size={20} /> },
-  { id: 'miembros', label: 'Miembros', icon: <Users size={20} /> },
-  { id: 'laFitness', label: 'LA Fitness', icon: <MapPin size={20} /> },
-  { id: 'tareas', label: 'Tareas', icon: <Bell size={20} /> }
-];
-
-const configPanels: Array<{ id: ConfigPanel; label: string; icon: ReactNode }> = [
-  { id: 'perfil', label: 'Perfil', icon: <User size={18} /> },
-  { id: 'mensajesMiembros', label: 'Mensajes de miembros', icon: <Clipboard size={18} /> },
-  { id: 'mensajesLa', label: 'Mensajes de LA Fitness', icon: <MessageCircle size={18} /> },
-  { id: 'semanal', label: 'Sistema semanal Golden Team', icon: <CalendarClock size={18} /> },
-  { id: 'ubicaciones', label: 'Ubicaciones', icon: <MapPin size={18} /> },
-  { id: 'importar', label: 'Importar y exportar', icon: <Import size={18} /> },
-  { id: 'copias', label: 'Copias de seguridad', icon: <Database size={18} /> },
-  { id: 'informacion', label: 'Información', icon: <CircleAlert size={18} /> }
-];
-
-const categories: Contact['category'][] = ['Miembro', 'Cliente', 'Distribuidor', 'Lider', 'Prospecto', 'Otro'];
-const statuses: ContactStatus[] = ['Activo', 'Pausado', 'Dado de baja'];
-const channels: Channel[] = ['WhatsApp', 'SMS', 'Ambos'];
-const queueStatuses: QueueStatus[] = ['Pendiente', 'Abierto', 'Enviado', 'Omitido', 'Fallido'];
-const businessStatuses: BusinessStatus[] = ['Nuevo', 'Mensaje pendiente', 'Contactado', 'Respondio', 'Interesado', 'Requiere llamada', 'Seguimiento', 'Cerrado', 'No respondio', 'No interesado', 'Dado de baja'];
-const peopleFilters: PeopleFilter[] = ['Todos', 'Nuevos', 'Contactados', 'Respondieron', 'Seguimiento', 'Cerrados'];
-const laLocations = ['Junction', 'Maitland', 'Otra ubicacion'];
-const languages = ['Espanol', 'Ingles'];
-const purchaseTypes: MemberPurchaseType[] = ['Autosuscripción', 'Compra única', 'No sé'];
-const memberInterests: MemberInterest[] = ['Solo protocolo', 'Interesado en negocio', 'Distribuidor activo'];
-const taskGroups: TaskGroup[] = ['Hoy', 'Vencidas', 'Próximas', 'Completadas'];
-const taskFilters: Array<'Todas' | TaskKind> = ['Todas', 'Miembro', 'Renovación', 'Reunión', 'LA Fitness'];
 const logoSrc = `${import.meta.env.BASE_URL}golden-team-logo.jpeg`;
 const entryLogoSrc = `${import.meta.env.BASE_URL}golden-team-logo-transparent.png`;
-const themeOptions: Array<{ id: VisualTheme; label: string; detail: string }> = [
-  { id: 'golden', label: 'Golden Team', detail: 'Negro, blanco y dorado' },
-  { id: 'classic', label: 'Classic Blue', detail: 'Azul marino, azul claro y blanco' },
-  { id: 'emerald', label: 'Emerald', detail: 'Verde oscuro, blanco y gris claro' },
-  { id: 'burgundy', label: 'Burgundy', detail: 'Vino, crema y dorado' }
-];
+const contactLanguages: ContactLanguage[] = ['Español', 'English'];
+const taskGroups: TaskGroup[] = ['Hoy', 'Vencidas', 'Próximas', 'Completadas'];
+const taskFilters: TaskFilter[] = ['Todas', 'Difusión', 'Seguimiento', 'Reuniones'];
 
-const blankContact: Contact = {
-  firstName: '',
-  lastName: '',
-  phone: '',
-  countryCode: '1',
-  country: 'Estados Unidos',
-  email: '',
-  category: 'Prospecto',
-  listIds: [],
-  tags: [],
-  notes: '',
-  createdAt: '',
-  status: 'Activo',
-  preferredChannel: 'WhatsApp',
-  consent: true,
-  consentDate: ''
-};
-
-const blankTemplate: MessageTemplate = { name: '', body: '', createdAt: '' };
-const blankCampaign: Campaign = { name: '', message: '', listIds: [], contactIds: [], channel: 'WhatsApp', notes: '', createdAt: '' };
-const blankMember: Member = {
-  firstName: '',
-  lastName: '',
-  phone: '',
-  countryCode: '1',
-  country: 'Estados Unidos',
-  email: '',
-  purchaseDate: todayKey(),
-  estimatedDeliveryDate: '',
-  protocolStartDate: '',
-  preferredChannel: 'WhatsApp',
-  purchaseType: 'No sé',
-  interest: 'Solo protocolo',
-  notes: '',
-  programActive: false,
-  programStatus: 'Sin iniciar',
-  weeklyEventsActive: false,
-  nextOrderDate: '',
-  createdAt: ''
-};
+const copy = {
+  es: {
+    nav: { inicio: 'Inicio', difusion: 'Difusión', seguimiento: 'Seguimiento', tareas: 'Tareas' },
+    homeTitle: 'Hola',
+    myLink: 'Mi enlace',
+    account: 'Cuenta',
+    profileInfo: 'Información del perfil',
+    feelLink: 'Mi Feel Great Link',
+    language: 'Idioma',
+    logout: 'Cerrar sesión',
+    broadcast: 'Difusión',
+    broadcastSub: 'Crea una lista, prepara tu contenido y envíalo contacto por contacto.',
+    newList: 'Nueva lista',
+    library: 'Biblioteca',
+    continueQueue: 'Continuar envío',
+    followUps: 'Seguimiento',
+    followUpsSub: 'Acompaña cada persona durante sus primeros 30 días.',
+    addPeople: 'Añadir personas',
+    importContacts: 'Importar contactos',
+    tasks: 'Tareas',
+    tasksSub: 'Mensajes y acciones que requieren tu atención.',
+    save: 'Guardar',
+    edit: 'Editar',
+    delete: 'Eliminar',
+    copy: 'Copiar',
+    share: 'Compartir',
+    open: 'Abrir',
+    name: 'Nombre',
+    phone: 'Teléfono',
+    channel: 'Canal',
+    status: 'Estado',
+    today: 'Hoy',
+    overdue: 'Vencidas',
+    upcoming: 'Próximas',
+    completed: 'Completadas'
+  },
+  en: {
+    nav: { inicio: 'Home', difusion: 'Broadcast', seguimiento: 'Follow-ups', tareas: 'Tasks' },
+    homeTitle: 'Hi',
+    myLink: 'My link',
+    account: 'Account',
+    profileInfo: 'Profile information',
+    feelLink: 'My Feel Great Link',
+    language: 'Language',
+    logout: 'Log out',
+    broadcast: 'Broadcast',
+    broadcastSub: 'Create a list, prepare your content, and send it contact by contact.',
+    newList: 'New list',
+    library: 'Library',
+    continueQueue: 'Continue sending',
+    followUps: 'Follow-ups',
+    followUpsSub: 'Support each person during their first 30 days.',
+    addPeople: 'Add people',
+    importContacts: 'Import contacts',
+    tasks: 'Tasks',
+    tasksSub: 'Messages and actions that need your attention.',
+    save: 'Save',
+    edit: 'Edit',
+    delete: 'Delete',
+    copy: 'Copy',
+    share: 'Share',
+    open: 'Open',
+    name: 'Name',
+    phone: 'Phone',
+    channel: 'Channel',
+    status: 'Status',
+    today: 'Today',
+    overdue: 'Overdue',
+    upcoming: 'Upcoming',
+    completed: 'Completed'
+  }
+} as const;
 
 function todayIso() {
   return new Date().toISOString();
@@ -153,19 +127,9 @@ function todayKey() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function shortDate(value?: string) {
-  if (!value) return 'Sin fecha';
-  return new Date(value).toLocaleDateString('es-US', { month: 'short', day: 'numeric' });
-}
-
-function downloadFile(content: string, filename: string, type: string) {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
+function shortDate(value?: string, language: AppLanguage = 'es') {
+  if (!value) return language === 'en' ? 'No date' : 'Sin fecha';
+  return new Date(`${value.slice(0, 10)}T12:00:00`).toLocaleDateString(language === 'en' ? 'en-US' : 'es-US', { month: 'short', day: 'numeric' });
 }
 
 function normalizeFeelGreatLink(value: string) {
@@ -185,76 +149,62 @@ function displayName(settings: AppSettings) {
   return settings.ownerName.trim() || 'Ayhann';
 }
 
-function tagValue(contact: Contact, prefix: string, fallback: string) {
-  return contact.tags.find((tag) => tag.startsWith(`${prefix}:`))?.slice(prefix.length + 1) || fallback;
+function firstName(settings: AppSettings) {
+  return displayName(settings).split(/\s+/)[0] || displayName(settings);
 }
 
-function withTag(contact: Contact, prefix: string, value: string) {
-  const rest = contact.tags.filter((tag) => !tag.startsWith(`${prefix}:`));
-  return value ? [...rest, `${prefix}:${value}`] : rest;
+function contactFullName(contact: Contact) {
+  return `${contact.firstName} ${contact.lastName || ''}`.trim();
 }
 
-function commercialStatus(contact: Contact): BusinessStatus {
-  if (contact.status === 'Dado de baja') return 'Dado de baja';
-  const found = contact.tags.find((tag) => businessStatuses.includes(tag as BusinessStatus));
-  return (found as BusinessStatus | undefined) || 'Nuevo';
+function contactLanguage(contact: Contact): ContactLanguage {
+  const tagged = contact.tags.find((tag) => tag.startsWith('Idioma:'))?.slice(7);
+  return contact.language || (tagged === 'English' ? 'English' : 'Español');
 }
 
-function statusTone(status: BusinessStatus): 'good' | 'warn' | 'bad' | 'blue' | 'neutral' {
-  if (['Respondio', 'Interesado', 'Cerrado'].includes(status)) return 'good';
-  if (['Mensaje pendiente', 'Requiere llamada', 'Seguimiento'].includes(status)) return 'warn';
-  if (['No respondio', 'No interesado', 'Dado de baja'].includes(status)) return 'bad';
-  if (status === 'Contactado') return 'blue';
-  return 'neutral';
+function withLanguageTag(contact: Contact, language: ContactLanguage) {
+  return [...contact.tags.filter((tag) => !tag.startsWith('Idioma:')), `Idioma:${language}`];
 }
 
-function SectionShell({ children }: { children: ReactNode }) {
-  return <div className="mx-auto grid w-full max-w-6xl gap-4">{children}</div>;
+function taskType(task: FollowUpTask): TaskFilter {
+  if (task.queueItemId || task.kind === 'Difusión' || task.kind === 'LA Fitness') return 'Difusión';
+  if (task.kind === 'Reunión') return 'Reuniones';
+  return 'Seguimiento';
 }
 
-function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <section className={`rounded-[1.7rem] border border-slate-100 bg-white p-5 shadow-soft ${className}`}>{children}</section>;
+function readableUrl(url?: string) {
+  if (!url) return '';
+  return url.replace(/^https?:\/\//, '').replace(/\/$/, '');
 }
 
-function SectionTitle({ title, subtitle, action }: { title: string; subtitle?: string; action?: ReactNode }) {
+function downloadFile(content: string, filename: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return (parts[0]?.[0] || 'G').toUpperCase();
+}
+
+function Field({ label, children, helper }: { label: string; children: ReactNode; helper?: ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-3">
-      <div>
-        <h2 className="text-xl font-bold tracking-normal text-ink">{title}</h2>
-        {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
-      </div>
-      {action}
-    </div>
-  );
-}
-
-function Field({ label, children, error }: { label: string; children: ReactNode; error?: string }) {
-  return (
-    <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+    <label className="grid min-w-0 gap-1.5 text-sm font-semibold text-slate-700">
       <span>{label}</span>
       {children}
-      {error ? <span className="text-sm text-red-700">{error}</span> : null}
+      {helper ? <span className="text-xs font-medium leading-relaxed text-slate-500">{helper}</span> : null}
     </label>
   );
 }
 
-function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'good' | 'warn' | 'bad' | 'blue' }) {
-  const color =
-    tone === 'good'
-      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-      : tone === 'warn'
-        ? 'bg-amber-50 text-amber-800 border-amber-200'
-        : tone === 'bad'
-          ? 'bg-red-50 text-red-800 border-red-200'
-          : tone === 'blue'
-            ? 'bg-sky-50 text-sky-800 border-sky-200'
-            : 'bg-slate-50 text-slate-700 border-slate-200';
-  return <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-bold ${color}`}>{children}</span>;
-}
-
 function PrimaryButton({ children, onClick, type = 'button', disabled = false, className = '' }: { children: ReactNode; onClick?: () => void; type?: 'button' | 'submit'; disabled?: boolean; className?: string }) {
   return (
-    <button type={type} onClick={onClick} disabled={disabled} className={`inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-brand px-5 py-3 text-base font-bold text-white shadow-sm transition hover:bg-brandDark disabled:cursor-not-allowed disabled:opacity-45 ${className}`}>
+    <button type={type} onClick={onClick} disabled={disabled} className={`inline-flex min-h-12 min-w-0 items-center justify-center gap-2 rounded-2xl bg-brand px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-brandDark disabled:cursor-not-allowed disabled:opacity-45 ${className}`}>
       {children}
     </button>
   );
@@ -262,125 +212,154 @@ function PrimaryButton({ children, onClick, type = 'button', disabled = false, c
 
 function SecondaryButton({ children, onClick, type = 'button', disabled = false, className = '' }: { children: ReactNode; onClick?: () => void; type?: 'button' | 'submit'; disabled?: boolean; className?: string }) {
   return (
-    <button type={type} onClick={onClick} disabled={disabled} className={`inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-brand transition hover:border-brandLight hover:text-brandDark disabled:cursor-not-allowed disabled:opacity-45 ${className}`}>
+    <button type={type} onClick={onClick} disabled={disabled} className={`inline-flex min-h-12 min-w-0 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-brand transition hover:border-brandLight hover:text-brandDark disabled:cursor-not-allowed disabled:opacity-45 ${className}`}>
       {children}
     </button>
   );
 }
 
-function IconButton({ label, children, onClick }: { label: string; children: ReactNode; onClick?: () => void }) {
+function IconButton({ label, children, onClick, className = '' }: { label: string; children: ReactNode; onClick?: () => void; className?: string }) {
   return (
-    <button onClick={onClick} aria-label={label} className="grid min-h-12 min-w-12 place-items-center rounded-2xl border border-slate-200 bg-white text-brand shadow-sm transition hover:border-brandLight">
+    <button onClick={onClick} aria-label={label} className={`grid min-h-12 min-w-12 place-items-center rounded-2xl border border-slate-200 bg-white text-brand shadow-sm transition hover:border-brandLight ${className}`}>
       {children}
     </button>
   );
+}
+
+function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <section className={`min-w-0 rounded-[1.4rem] border border-slate-100 bg-white p-4 shadow-sm ${className}`}>{children}</section>;
+}
+
+function Header({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
+  return (
+    <section className="min-w-0 rounded-[1.7rem] bg-black p-5 text-white shadow-soft">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-black tracking-normal">{title}</h1>
+          <p className="mt-1 max-w-xl text-sm leading-relaxed text-white/70">{subtitle}</p>
+        </div>
+        {action}
+      </div>
+    </section>
+  );
+}
+
+function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'good' | 'warn' | 'bad' | 'blue' }) {
+  const color =
+    tone === 'good'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+      : tone === 'warn'
+        ? 'border-amber-200 bg-amber-50 text-amber-800'
+        : tone === 'bad'
+          ? 'border-red-200 bg-red-50 text-red-800'
+          : tone === 'blue'
+            ? 'border-sky-200 bg-sky-50 text-sky-800'
+            : 'border-slate-200 bg-slate-50 text-slate-700';
+  return <span className={`inline-flex min-w-0 items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-black ${color}`}>{children}</span>;
 }
 
 function App() {
   const [active, setActive] = useState<MainSection>('inicio');
+  const [ready, setReady] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
+  const [notice, setNotice] = useState('Listo.');
+  const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [lists, setLists] = useState<InternalList[]>([]);
-  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [tasks, setTasks] = useState<FollowUpTask[]>([]);
   const [weeklyEvents, setWeeklyEvents] = useState<WeeklyEvent[]>([]);
-  const [settings, setSettings] = useState<AppSettings>(defaultSettings);
-  const [ready, setReady] = useState(false);
-  const [notice, setNotice] = useState('Listo.');
-  const [configOpen, setConfigOpen] = useState(false);
-  const [configPanel, setConfigPanel] = useState<ConfigPanel>('perfil');
-  const [profileOpen, setProfileOpen] = useState(false);
+  const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
   const [entryName, setEntryName] = useState('');
   const [entryLink, setEntryLink] = useState('');
   const [entryAccessCode, setEntryAccessCode] = useState('');
-  const [entryError, setEntryError] = useState('');
   const [showAccessCode, setShowAccessCode] = useState(false);
-  const [quickLinkOpen, setQuickLinkOpen] = useState(false);
-  const [contactForm, setContactForm] = useState<Contact>(blankContact);
-  const [editingContactId, setEditingContactId] = useState<number | null>(null);
-  const [contactLanguage, setContactLanguage] = useState('Espanol');
-  const [contactGym, setContactGym] = useState('Junction');
-  const [contactProduct, setContactProduct] = useState('');
-  const [contactNextAction, setContactNextAction] = useState('Enviar mensaje');
-  const [contactBusinessStatus, setContactBusinessStatus] = useState<BusinessStatus>('Nuevo');
-  const [selectedContacts, setSelectedContacts] = useState<number[]>([]);
-  const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null);
-  const [contactSearch, setContactSearch] = useState('');
-  const [memberForm, setMemberForm] = useState<Member>(blankMember);
-  const [editingMemberId, setEditingMemberId] = useState<number | null>(null);
-  const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
-  const [memberSearch, setMemberSearch] = useState('');
-  const [memberTaskTime, setMemberTaskTime] = useState('10:00');
-  const [pastedProspects, setPastedProspects] = useState('');
-  const [taskGroup, setTaskGroup] = useState<TaskGroup>('Hoy');
-  const [taskFilter, setTaskFilter] = useState<'Todas' | TaskKind>('Todas');
-  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
-  const [peopleFilter, setPeopleFilter] = useState<PeopleFilter>('Todos');
-  const [listFilter, setListFilter] = useState('');
-  const [countryFilter, setCountryFilter] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [channelFilter, setChannelFilter] = useState('');
+  const [entryError, setEntryError] = useState('');
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [profileName, setProfileName] = useState('');
+  const [profileLink, setProfileLink] = useState('');
+  const [selectedListId, setSelectedListId] = useState<number | null>(null);
   const [listName, setListName] = useState('');
-  const [editingListId, setEditingListId] = useState<number | null>(null);
-  const [templateForm, setTemplateForm] = useState<MessageTemplate>(blankTemplate);
-  const [editingTemplateId, setEditingTemplateId] = useState<number | null>(null);
-  const [templateSearch, setTemplateSearch] = useState('');
-  const [previewContactId, setPreviewContactId] = useState<number | ''>('');
-  const [campaignForm, setCampaignForm] = useState<Campaign>(blankCampaign);
-  const [campaignImage, setCampaignImage] = useState<CampaignImage | undefined>();
-  const [sendStep, setSendStep] = useState<SendStep>(1);
-  const [recipientMode, setRecipientMode] = useState('LA Fitness');
-  const [sendLanguage, setSendLanguage] = useState('Espanol');
+  const [listLanguageFilter, setListLanguageFilter] = useState<'Todos' | ContactLanguage>('Todos');
+  const [broadcastContact, setBroadcastContact] = useState({ firstName: '', lastName: '', phone: '', language: 'Español' as ContactLanguage, channel: 'WhatsApp' as Channel });
+  const [csvText, setCsvText] = useState('');
+  const [pasteText, setPasteText] = useState('');
+  const [messageEs, setMessageEs] = useState('');
+  const [messageEn, setMessageEn] = useState('');
+  const [audience, setAudience] = useState<Audience>('Español');
+  const [selectedBroadcastContactIds, setSelectedBroadcastContactIds] = useState<number[]>([]);
+  const [broadcastChannel, setBroadcastChannel] = useState<Channel>('WhatsApp');
+  const [selectedMediaId, setSelectedMediaId] = useState<number | ''>('');
   const [activeCampaignId, setActiveCampaignId] = useState<number | null>(null);
   const [queueIndex, setQueueIndex] = useState(0);
-  const [csvText, setCsvText] = useState('');
-  const [csvDefaultCode, setCsvDefaultCode] = useState('1');
-  const [backupText, setBackupText] = useState('');
-  const [restoreMode, setRestoreMode] = useState<'replace' | 'merge'>('merge');
-  const [doubleDelete, setDoubleDelete] = useState('');
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [assetName, setAssetName] = useState('');
+  const [followForm, setFollowForm] = useState({
+    firstName: '',
+    lastName: '',
+    phone: '',
+    language: 'Español' as ContactLanguage,
+    startDate: todayKey(),
+    channel: 'WhatsApp' as Exclude<Channel, 'Ambos'>,
+    followUpTime: '10:00',
+    reminderMinutes: 30 as 15 | 30,
+    weeklyEventsActive: false
+  });
+  const [followImportText, setFollowImportText] = useState('');
+  const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
+  const [taskGroup, setTaskGroup] = useState<TaskGroup>('Hoy');
+  const [taskFilter, setTaskFilter] = useState<TaskFilter>('Todas');
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaInputRef = useRef<HTMLInputElement | null>(null);
+
+  const lang = settings.preferredLanguage || 'es';
+  const c = copy[lang];
+  const selectedList = lists.find((list) => list.id === selectedListId) || null;
+  const activeCampaign = campaigns.find((campaign) => campaign.id === activeCampaignId) || null;
+  const selectedQueue = useMemo(() => queue.filter((item) => item.campaignId === activeCampaignId), [activeCampaignId, queue]);
+  const currentQueueItem = selectedQueue[queueIndex];
+  const selectedMember = members.find((member) => member.id === selectedMemberId) || null;
+  const selectedTask = useMemo(() => [...tasks, ...queueTasksFromQueue(queue)].find((task) => task.id === selectedTaskId) || null, [queue, selectedTaskId, tasks]);
 
   async function loadAll(message?: string) {
-    const existingEvents = await db.weeklyEvents.count();
-    if (!existingEvents) await db.weeklyEvents.bulkAdd(defaultWeeklyEvents.map((event) => ({ ...event, updatedAt: todayIso() })));
-    const [loadedSettings, loadedContacts, loadedLists, loadedTemplates, loadedCampaigns, loadedQueue, loadedMembers, loadedTasks, loadedWeeklyEvents] = await Promise.all([
+    const [loadedSettings, loadedContacts, loadedLists, loadedCampaigns, loadedQueue, loadedMembers, loadedTasks, loadedEvents, loadedMedia] = await Promise.all([
       ensureSettings(),
       db.contacts.orderBy('firstName').toArray(),
       db.lists.orderBy('name').toArray(),
-      db.templates.orderBy('name').toArray(),
       db.campaigns.orderBy('createdAt').reverse().toArray(),
       db.queue.orderBy('id').toArray(),
       db.members.orderBy('firstName').toArray(),
       db.tasks.orderBy('dueDate').toArray(),
-      db.weeklyEvents.orderBy('weekday').toArray()
+      db.weeklyEvents.orderBy('weekday').toArray(),
+      db.mediaAssets.orderBy('createdAt').reverse().toArray()
     ]);
     setSettings(loadedSettings);
+    setProfileName(loadedSettings.ownerName || '');
+    setProfileLink(loadedSettings.feelGreatLink || '');
     setContacts(loadedContacts);
     setLists(loadedLists);
-    setTemplates(loadedTemplates);
     setCampaigns(loadedCampaigns);
     setQueue(loadedQueue);
     setMembers(loadedMembers);
     setTasks(loadedTasks);
-    setWeeklyEvents(loadedWeeklyEvents);
+    setWeeklyEvents(loadedEvents);
+    setMediaAssets(loadedMedia);
     if (!loadedSettings.sessionActive) {
       setEntryName((current) => current || loadedSettings.ownerName || '');
       setEntryLink((current) => current || loadedSettings.feelGreatLink || '');
     }
+    if (!activeCampaignId) {
+      const pendingCampaign = loadedCampaigns.find((campaign) => loadedQueue.some((item) => item.campaignId === campaign.id && ['Pendiente', 'Abierto'].includes(item.status)));
+      if (pendingCampaign?.id) setActiveCampaignId(pendingCampaign.id);
+    }
     setReady(true);
-    if (!activeCampaignId && loadedCampaigns[0]?.id) setActiveCampaignId(loadedCampaigns[0].id);
     if (message) setNotice(message);
   }
 
   useEffect(() => {
-    const boot = async () => {
-      await loadAll('Datos locales cargados.');
-    };
-    boot().catch((error) => setNotice(error instanceof Error ? error.message : 'No se pudieron cargar los datos.'));
+    loadAll('Datos locales cargados.').catch((error) => setNotice(error instanceof Error ? error.message : 'No se pudieron cargar los datos.'));
     const onOnline = () => setOnline(true);
     const onOffline = () => setOnline(false);
     const onAppNotice = (event: Event) => setNotice((event as CustomEvent<string>).detail);
@@ -394,121 +373,57 @@ function App() {
     };
   }, []);
 
-  const selectedQueue = useMemo(() => queue.filter((item) => item.campaignId === activeCampaignId), [activeCampaignId, queue]);
-  const currentQueueItem = selectedQueue[queueIndex];
-  const activeCampaign = campaigns.find((campaign) => campaign.id === activeCampaignId);
-
   useEffect(() => {
     setQueueIndex(bestQueueIndex(selectedQueue));
   }, [activeCampaignId, selectedQueue.length]);
 
-  const selectedPerson = contacts.find((contact) => contact.id === selectedPersonId) || null;
-  const selectedMember = members.find((member) => member.id === selectedMemberId) || null;
-  const phonePreview = useMemo(() => normalizePhone(contactForm.phone, contactForm.countryCode || settings.defaultCountryCode), [contactForm.countryCode, contactForm.phone, settings.defaultCountryCode]);
-  const phoneDuplicate = useMemo(() => isDuplicatePhone(phonePreview.normalized, contacts.map((contact) => contact.phone), editingContactId ? contacts.find((contact) => contact.id === editingContactId)?.phone : undefined), [contacts, editingContactId, phonePreview.normalized]);
-  const memberPhonePreview = useMemo(() => normalizePhone(memberForm.phone, memberForm.countryCode || settings.defaultCountryCode), [memberForm.countryCode, memberForm.phone, settings.defaultCountryCode]);
-  const memberPhoneDuplicate = useMemo(() => isDuplicatePhone(memberPhonePreview.normalized, members.map((member) => member.phone), editingMemberId ? members.find((member) => member.id === editingMemberId)?.phone : undefined), [editingMemberId, memberPhonePreview.normalized, members]);
+  const listContacts = useMemo(() => {
+    if (!selectedList?.id) return [];
+    return contacts.filter((contact) => contact.listIds.includes(selectedList.id!));
+  }, [contacts, selectedList]);
 
-  const todayContacts = useMemo(() => contacts.filter((contact) => contact.createdAt?.slice(0, 10) === todayKey()), [contacts]);
-  const laFitnessContacts = useMemo(() => contacts.filter((contact) => contact.category === 'Prospecto' || contact.tags.includes('LA Fitness') || tagValue(contact, 'Gimnasio', '').includes('Junction') || tagValue(contact, 'Gimnasio', '').includes('Maitland') || contact.listIds.some((id) => lists.find((list) => list.id === id)?.name.toLowerCase().includes('fitness'))), [contacts, lists]);
-  const activeMembers = useMemo(() => members.filter((member) => member.programStatus !== 'Completado'), [members]);
-  const todayTaskKey = todayKey();
-  const memberTasks = useMemo(() => tasks, [tasks]);
-  const queueTasks = useMemo<FollowUpTask[]>(() => queue.filter((item) => item.status === 'Pendiente' || item.status === 'Abierto').map((item) => ({
-    id: -Number(item.id || 0),
-    queueItemId: item.id,
-    contactId: item.contactId,
-    kind: 'LA Fitness',
-    program: 'Cola individual LA Fitness',
-    title: item.status === 'Abierto' ? 'Confirmar envío' : 'Enviar mensaje',
-    contactName: `${item.contactSnapshot.firstName} ${item.contactSnapshot.lastName}`.trim(),
-    phone: item.contactSnapshot.phone,
-    channel: item.channel === 'SMS' || item.channel === 'WhatsApp' ? item.channel : item.contactSnapshot.preferredChannel === 'SMS' ? 'SMS' : 'WhatsApp',
-    dueDate: item.createdAt.slice(0, 10),
-    dueTime: '10:00',
-    message: item.personalizedMessage,
-    status: 'Pendiente',
-    createdAt: item.createdAt,
-    sourceKey: `queue:${item.id}`
-  })), [queue]);
-  const allActionTasks = useMemo(() => [...memberTasks, ...queueTasks].sort((a, b) => `${a.dueDate} ${a.dueTime}`.localeCompare(`${b.dueDate} ${b.dueTime}`)), [memberTasks, queueTasks]);
-  const todaysTasks = useMemo(() => allActionTasks.filter((task) => task.status !== 'Completada' && task.dueDate === todayTaskKey), [allActionTasks, todayTaskKey]);
-  const overdueTasks = useMemo(() => allActionTasks.filter((task) => task.status !== 'Completada' && task.dueDate < todayTaskKey), [allActionTasks, todayTaskKey]);
-  const upcomingTasks = useMemo(() => allActionTasks.filter((task) => task.status !== 'Completada' && task.dueDate > todayTaskKey), [allActionTasks, todayTaskKey]);
-  const completedTasks = useMemo(() => allActionTasks.filter((task) => task.status === 'Completada'), [allActionTasks]);
-  const selectedTask = allActionTasks.find((task) => task.id === selectedTaskId) || null;
+  const visibleListContacts = useMemo(() => {
+    if (listLanguageFilter === 'Todos') return listContacts;
+    return listContacts.filter((contact) => contactLanguage(contact) === listLanguageFilter);
+  }, [listContacts, listLanguageFilter]);
 
-  const filteredContacts = useMemo(() => {
-    const query = contactSearch.toLowerCase();
-    return contacts.filter((contact) => {
-      const business = commercialStatus(contact);
-      const gym = tagValue(contact, 'Gimnasio', '');
-      const inSearch = `${contact.firstName} ${contact.lastName} ${contact.phone} ${gym}`.toLowerCase().includes(query);
-      const inChip =
-        peopleFilter === 'Todos' ||
-        (peopleFilter === 'Nuevos' && business === 'Nuevo') ||
-        (peopleFilter === 'Contactados' && ['Mensaje pendiente', 'Contactado'].includes(business)) ||
-        (peopleFilter === 'Respondieron' && ['Respondio', 'Interesado'].includes(business)) ||
-        (peopleFilter === 'Seguimiento' && ['Requiere llamada', 'Seguimiento', 'No respondio'].includes(business)) ||
-        (peopleFilter === 'Cerrados' && business === 'Cerrado');
-      return (
-        inSearch &&
-        inChip &&
-        (!listFilter || contact.listIds.includes(Number(listFilter))) &&
-        (!countryFilter || contact.country === countryFilter) &&
-        (!categoryFilter || contact.category === categoryFilter) &&
-        (!statusFilter || contact.status === statusFilter) &&
-        (!channelFilter || contact.preferredChannel === channelFilter)
-      );
-    });
-  }, [categoryFilter, channelFilter, contactSearch, contacts, countryFilter, listFilter, peopleFilter, statusFilter]);
+  const activeFollowPeople = useMemo(() => members.filter((member) => member.programStatus !== 'Completado'), [members]);
+  const completedFollowPeople = useMemo(() => members.filter((member) => member.programStatus === 'Completado'), [members]);
+  const actionTasks = useMemo(() => [...tasks, ...queueTasksFromQueue(queue)].sort((a, b) => `${a.dueDate} ${a.dueTime}`.localeCompare(`${b.dueDate} ${b.dueTime}`)), [queue, tasks]);
+  const todayTasks = useMemo(() => actionTasks.filter((task) => task.status !== 'Completada' && task.dueDate === todayKey()), [actionTasks]);
+  const overdueTasks = useMemo(() => actionTasks.filter((task) => task.status !== 'Completada' && task.dueDate < todayKey()), [actionTasks]);
+  const upcomingTasks = useMemo(() => actionTasks.filter((task) => task.status !== 'Completada' && task.dueDate > todayKey()), [actionTasks]);
+  const completedTasks = useMemo(() => actionTasks.filter((task) => task.status === 'Completada'), [actionTasks]);
+  const taskBadge = todayTasks.length + overdueTasks.length;
 
-  const sendSelectedContacts = useMemo(() => {
-    const selected = new Map<number, Contact>();
-    const add = (contact: Contact) => {
-      if (contact.id) selected.set(contact.id, contact);
-    };
-    if (recipientMode === 'LA Fitness') laFitnessContacts.forEach(add);
-    if (recipientMode === 'Todos los prospectos pendientes') laFitnessContacts.filter((contact) => ['Nuevo', 'Mensaje pendiente'].includes(commercialStatus(contact))).forEach(add);
-    if (recipientMode === 'Ubicacion especifica') contacts.filter((contact) => tagValue(contact, 'Gimnasio', '') === contactGym).forEach(add);
-    if (recipientMode === 'Personas importadas hoy') todayContacts.filter((contact) => laFitnessContacts.some((prospect) => prospect.id === contact.id)).forEach(add);
-    if (recipientMode === 'Personas que no respondieron') contacts.filter((contact) => commercialStatus(contact) === 'No respondio').forEach(add);
-    if (recipientMode === 'Seguimiento semanal') laFitnessContacts.filter((contact) => commercialStatus(contact) === 'Seguimiento').forEach(add);
-    campaignForm.contactIds.forEach((id) => {
-      const contact = contacts.find((item) => item.id === id);
-      if (contact) add(contact);
-    });
-    campaignForm.listIds.forEach((id) => contacts.filter((contact) => contact.listIds.includes(id)).forEach(add));
-    return Array.from(selected.values());
-  }, [campaignForm.contactIds, campaignForm.listIds, contactGym, contacts, laFitnessContacts, recipientMode, todayContacts]);
-
-  const campaignPreview = useMemo<CampaignPreview>(() => {
-    const included: Contact[] = [];
-    const excluded: CampaignPreview['excluded'] = [];
-    sendSelectedContacts.forEach((contact) => {
-      const normalized = normalizePhone(contact.phone, contact.countryCode || settings.defaultCountryCode);
-      if (contact.status === 'Dado de baja' || commercialStatus(contact) === 'Dado de baja') excluded.push({ contact, reason: 'Dado de baja' });
-      else if (contact.status === 'Pausado') excluded.push({ contact, reason: 'Pausado' });
-      else if (!contact.consent) excluded.push({ contact, reason: 'Sin consentimiento' });
-      else if (!normalized.valid) excluded.push({ contact, reason: 'Numero invalido' });
-      else included.push(contact);
-    });
-    return { contacts: included, excluded };
-  }, [sendSelectedContacts, settings.defaultCountryCode]);
-
-  function listNames(ids: number[]) {
-    return ids.map((id) => lists.find((list) => list.id === id)?.name).filter(Boolean).join(', ');
+  function queueTasksFromQueue(items: QueueItem[]): FollowUpTask[] {
+    return items
+      .filter((item) => item.status === 'Pendiente' || item.status === 'Abierto')
+      .map((item) => ({
+        id: -Number(item.id || 0),
+        queueItemId: item.id,
+        contactId: item.contactId,
+        kind: 'Difusión',
+        program: 'Difusión manual',
+        title: item.status === 'Abierto' ? (lang === 'en' ? 'Confirm send' : 'Confirmar envío') : (lang === 'en' ? 'Send message' : 'Enviar mensaje'),
+        contactName: contactFullName(item.contactSnapshot),
+        phone: item.contactSnapshot.phone,
+        channel: item.channel === 'WhatsApp' || item.channel === 'SMS' ? item.channel : 'No definido',
+        language: item.language || contactLanguage(item.contactSnapshot),
+        dueDate: item.createdAt.slice(0, 10),
+        dueTime: '10:00',
+        message: item.personalizedMessage,
+        status: 'Pendiente',
+        createdAt: item.createdAt,
+        sourceKey: `queue:${item.id}`
+      }));
   }
 
   function messageContext() {
     return { userName: displayName(settings), feelGreatLink: settings.feelGreatLink || '' };
   }
 
-  function insertMessageVariable(variable: '{{nombre_contacto}}' | '{{feelgreat_link}}') {
-    setCampaignForm((current) => ({ ...current, message: `${current.message}${current.message ? ' ' : ''}${variable}` }));
-  }
-
-  async function saveProfilePatch(patch: Partial<AppSettings>, message = 'Perfil guardado.') {
+  async function saveSettingsPatch(patch: Partial<AppSettings>, message = lang === 'en' ? 'Saved.' : 'Guardado.') {
     const updated = { ...settings, ...patch, id: 'main' as const };
     await db.settings.put(updated);
     setSettings(updated);
@@ -522,1303 +437,446 @@ function App() {
     if (!name) return setEntryError('Escribe tu nombre.');
     if (!isValidFeelGreatLink(link)) return setEntryError('Revisa que hayas pegado tu enlace completo.');
     if (!isValidAccessCode(entryAccessCode)) return setEntryError('Código incorrecto. Verifica e intenta nuevamente.');
-    await saveProfilePatch({ ownerName: name, feelGreatLink: link, sessionActive: true, visualTheme: settings.visualTheme || 'golden' }, 'Bienvenido a Golden Team Connect.');
+    await saveSettingsPatch({ ownerName: name, feelGreatLink: link, sessionActive: true, visualTheme: settings.visualTheme || 'golden' }, 'Bienvenido a Golden Team Connect.');
     setEntryAccessCode('');
     setEntryError('');
   }
 
   async function closeSession() {
-    if (!confirm('Cerrar sesión? Tus datos guardados permanecerán en este dispositivo.')) return;
-    await saveProfilePatch({ sessionActive: false }, 'Sesión cerrada.');
+    if (!confirm(lang === 'en' ? 'Log out? Your local data will stay on this device.' : '¿Cerrar sesión? Tus datos locales permanecerán en este dispositivo.')) return;
+    await saveSettingsPatch({ sessionActive: false }, lang === 'en' ? 'Session closed.' : 'Sesión cerrada.');
     setEntryAccessCode('');
-    setProfileOpen(false);
+    setAccountOpen(false);
   }
 
   async function copyFeelGreatLink() {
-    if (!settings.feelGreatLink) return setNotice('Añade tu Feel Great Link en tu perfil.');
+    if (!settings.feelGreatLink) return setNotice(lang === 'en' ? 'Add your Feel Great Link first.' : 'Añade tu Feel Great Link primero.');
     await navigator.clipboard.writeText(settings.feelGreatLink);
-    setNotice('Enlace copiado.');
+    setNotice(lang === 'en' ? 'Link copied.' : 'Enlace copiado.');
   }
 
   function openFeelGreatLink() {
-    if (!settings.feelGreatLink) return setNotice('Añade tu Feel Great Link en tu perfil.');
+    if (!settings.feelGreatLink) return setNotice(lang === 'en' ? 'Add your Feel Great Link first.' : 'Añade tu Feel Great Link primero.');
     window.open(settings.feelGreatLink, '_blank', 'noopener,noreferrer');
   }
 
   async function shareFeelGreatLink() {
-    if (!settings.feelGreatLink) return setNotice('Añade tu Feel Great Link en tu perfil.');
-    if (navigator.share) {
-      await navigator.share({ title: 'Mi Feel Great Link', text: settings.feelGreatLink, url: settings.feelGreatLink });
-      setNotice('Enlace compartido.');
-    } else {
-      await copyFeelGreatLink();
+    if (!settings.feelGreatLink) return setNotice(lang === 'en' ? 'Add your Feel Great Link first.' : 'Añade tu Feel Great Link primero.');
+    if (navigator.share) await navigator.share({ title: 'Feel Great Link', text: settings.feelGreatLink, url: settings.feelGreatLink });
+    else await copyFeelGreatLink();
+  }
+
+  async function saveProfile(event: FormEvent) {
+    event.preventDefault();
+    const link = normalizeFeelGreatLink(profileLink);
+    if (!profileName.trim()) return setNotice(lang === 'en' ? 'Name is required.' : 'El nombre es obligatorio.');
+    if (link && !isValidFeelGreatLink(link)) return setNotice(lang === 'en' ? 'Check your Feel Great Link.' : 'Revisa tu Feel Great Link.');
+    await saveSettingsPatch({ ownerName: profileName.trim(), feelGreatLink: link }, lang === 'en' ? 'Profile saved.' : 'Perfil guardado.');
+  }
+
+  async function handleProfilePhoto(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressImage(file, 700, 0.82);
+      await saveSettingsPatch({ profilePhoto: compressed.dataUrl }, lang === 'en' ? 'Photo saved.' : 'Foto guardada.');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'No se pudo guardar la foto.');
+    } finally {
+      if (event.target) event.target.value = '';
     }
   }
 
-  function resetContactForm() {
-    setContactForm({ ...blankContact, countryCode: settings.defaultCountryCode, country: settings.defaultCountry });
-    setEditingContactId(null);
-    setContactLanguage('Espanol');
-    setContactGym('Junction');
-    setContactProduct('');
-    setContactNextAction('Enviar mensaje');
-    setContactBusinessStatus('Nuevo');
-  }
-
-  function resetMemberForm() {
-    setMemberForm({ ...blankMember, countryCode: settings.defaultCountryCode, country: settings.defaultCountry, purchaseDate: todayKey() });
-    setMemberTaskTime('10:00');
-    setEditingMemberId(null);
-  }
-
-  function editMember(member: Member) {
-    setMemberForm(member);
-    setMemberTaskTime('10:00');
-    setEditingMemberId(member.id || null);
-    setSelectedMemberId(null);
-    setActive('miembros');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-
-  async function regenerateMemberTasks(member: Member) {
-    if (!member.id) return;
-    const existingCompleted = await db.tasks.where('memberId').equals(member.id).and((task) => task.status === 'Completada').toArray();
-    await db.tasks.where('memberId').equals(member.id).and((task) => task.status !== 'Completada').delete();
-    const generated = member.programActive && member.protocolStartDate && member.programStatus === 'Activo' ? buildFirst30DayTasks(member, settings.feelGreatLink || '').map((task) => ({ ...task, dueTime: memberTaskTime || task.dueTime })) : [];
-    const renewal = buildRenewalTask(member);
-    const nextTasks = [...generated, ...(renewal ? [renewal] : [])].filter((task) => !existingCompleted.some((done) => done.sourceKey === task.sourceKey));
-    if (nextTasks.length) await db.tasks.bulkAdd(nextTasks);
-  }
-
-  async function saveMember(event: FormEvent) {
-    event.preventDefault();
-    if (!memberForm.firstName.trim()) return setNotice('Escribe el nombre del miembro.');
-    if (!memberPhonePreview.valid) return setNotice(memberPhonePreview.message);
-    if (memberPhoneDuplicate) return setNotice('Ese número ya existe en miembros.');
-    const wantsProgram = Boolean(memberForm.programActive && memberForm.protocolStartDate);
-    const payload: Member = {
-      ...memberForm,
-      firstName: memberForm.firstName.trim(),
-      lastName: memberForm.lastName?.trim() || '',
-      phone: memberPhonePreview.normalized,
-      countryCode: memberForm.countryCode || settings.defaultCountryCode,
-      country: memberForm.country || settings.defaultCountry,
-      createdAt: memberForm.createdAt || todayIso(),
-      programActive: wantsProgram,
-      programStatus: wantsProgram ? 'Activo' : memberForm.protocolStartDate ? memberForm.programStatus : 'Sin iniciar'
-    };
-    const memberId = editingMemberId ? editingMemberId : await db.members.add(payload);
-    await db.members.put({ ...payload, id: memberId });
-    await regenerateMemberTasks({ ...payload, id: memberId });
-    resetMemberForm();
-    await loadAll(editingMemberId ? 'Miembro actualizado.' : 'Miembro añadido.');
-  }
-
-  async function completeMemberTask(task: FollowUpTask, channel?: 'WhatsApp' | 'SMS') {
-    if (!task.id || task.id < 0) return;
-    await db.tasks.update(task.id, { status: 'Completada', completedAt: todayIso(), completedChannel: channel || (task.channel === 'No definido' ? undefined : task.channel) });
-    if (task.programDay === 30 && task.memberId) await db.members.update(task.memberId, { programStatus: 'Completado', programActive: false });
-    await loadAll('Tarea completada.');
-  }
-
-  async function postponeMemberTask(task: FollowUpTask, mode: 'today' | 'tomorrow' | 'three' | 'custom') {
-    if (!task.id || task.id < 0) return;
-    const date = new Date(`${todayKey()}T00:00:00`);
-    let dueTime = task.dueTime;
-    if (mode === 'today') dueTime = '17:00';
-    if (mode === 'tomorrow') date.setDate(date.getDate() + 1);
-    if (mode === 'three') date.setDate(date.getDate() + 3);
-    if (mode === 'custom') {
-      const value = prompt('Fecha nueva (YYYY-MM-DD)', task.dueDate);
-      if (!value) return;
-      await db.tasks.update(task.id, { dueDate: value, status: 'Pospuesta' });
-      await loadAll('Tarea pospuesta.');
-      return;
-    }
-    await db.tasks.update(task.id, { dueDate: date.toISOString().slice(0, 10), dueTime: mode === 'tomorrow' ? '10:00' : dueTime, status: 'Pospuesta' });
-    await loadAll('Tarea pospuesta.');
-  }
-
-  async function addTaskNote(task: FollowUpTask) {
-    if (!task.id || task.id < 0) return setNotice('Añade la nota desde el perfil del prospecto en LA Fitness.');
-    const note = prompt('Nueva nota para esta tarea');
-    if (!note) return;
-    const notes = [task.notes, `[${new Date().toLocaleString()}] ${note}`].filter(Boolean).join('\n');
-    await db.tasks.update(task.id, { notes });
-    await loadAll('Nota guardada en la tarea.');
-  }
-
-  async function pauseMemberProgram(member: Member) {
-    if (!member.id) return;
-    await db.members.update(member.id, { programStatus: 'Pausado', programActive: false });
-    await loadAll('Programa pausado.');
-  }
-
-  async function finishMemberProgram(member: Member) {
-    if (!member.id || !confirm('Finalizar el programa de este miembro?')) return;
-    await db.members.update(member.id, { programStatus: 'Completado', programActive: false });
-    await loadAll('Programa finalizado.');
-  }
-
-  async function activateMonthlyFollowUp(member: Member) {
-    if (!member.id || !confirm('Pasar a seguimiento mensual para este miembro?')) return;
-    const due = new Date();
-    due.setMonth(due.getMonth() + 1);
-    await db.tasks.add({
-      memberId: member.id,
-      kind: 'Miembro',
-      program: 'Seguimiento mensual',
-      title: 'Seguimiento mensual',
-      contactName: memberName(member),
-      phone: member.phone,
-      channel: member.preferredChannel,
-      dueDate: due.toISOString().slice(0, 10),
-      dueTime: '10:00',
-      message: `Hola, ${member.firstName}. Quería tocar base contigo y saber cómo te ha ido este mes.`,
-      status: 'Pendiente',
-      createdAt: todayIso(),
-      sourceKey: `member:${member.id}:monthly:${due.toISOString().slice(0, 10)}`
-    });
-    await loadAll('Seguimiento mensual creado.');
-  }
-
-  function editContact(contact: Contact) {
-    setContactForm(contact);
-    setEditingContactId(contact.id || null);
-    setContactLanguage(tagValue(contact, 'Idioma', 'Espanol'));
-    setContactGym(tagValue(contact, 'Gimnasio', 'Junction'));
-    setContactProduct(tagValue(contact, 'Muestra', ''));
-    setContactNextAction(tagValue(contact, 'Proxima', 'Enviar mensaje'));
-    setContactBusinessStatus(commercialStatus(contact));
-    setActive('laFitness');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-
-  async function saveContact(event: FormEvent) {
-    event.preventDefault();
-    if (!contactForm.firstName.trim()) return setNotice('Escribe el nombre.');
-    if (!phonePreview.valid) return setNotice(phonePreview.message);
-    if (phoneDuplicate) return setNotice('Ese numero ya existe.');
-    let tags = contactForm.tags.filter((tag) => !businessStatuses.includes(tag as BusinessStatus));
-    tags = withTag({ ...contactForm, tags }, 'Idioma', contactLanguage);
-    tags = withTag({ ...contactForm, tags }, 'Gimnasio', contactGym);
-    tags = withTag({ ...contactForm, tags }, 'Muestra', contactProduct);
-    tags = withTag({ ...contactForm, tags }, 'Proxima', contactNextAction);
-    if (contactBusinessStatus !== 'Dado de baja') tags.push(contactBusinessStatus);
-    const payload: Contact = {
-      ...contactForm,
-      firstName: contactForm.firstName.trim(),
-      lastName: contactForm.lastName.trim(),
-      phone: phonePreview.normalized,
-      countryCode: contactForm.countryCode || settings.defaultCountryCode,
-      country: contactForm.country || settings.defaultCountry,
-      tags,
-      createdAt: contactForm.createdAt || todayIso(),
-      status: contactBusinessStatus === 'Dado de baja' ? 'Dado de baja' : contactForm.status === 'Dado de baja' ? 'Activo' : contactForm.status,
-      consentDate: contactForm.consent ? contactForm.consentDate || todayIso() : undefined,
-      unsubscribedAt: contactBusinessStatus === 'Dado de baja' ? contactForm.unsubscribedAt || todayIso() : undefined
-    };
-    if (editingContactId) await db.contacts.put({ ...payload, id: editingContactId });
-    else await db.contacts.add(payload);
-    resetContactForm();
-    await loadAll(editingContactId ? 'Persona actualizada.' : 'Persona anadida.');
-  }
-
-  async function deleteContact(id?: number) {
-    if (!id || !confirm('Eliminar esta persona? El historial existente se conserva.')) return;
-    await db.contacts.delete(id);
-    setSelectedPersonId(null);
-    await loadAll('Persona eliminada.');
-  }
-
-  async function setBusinessStatus(contact: Contact, status: BusinessStatus) {
-    const tags = contact.tags.filter((tag) => !businessStatuses.includes(tag as BusinessStatus));
-    if (status !== 'Dado de baja') tags.push(status);
-    await db.contacts.update(contact.id!, {
-      tags,
-      status: status === 'Dado de baja' ? 'Dado de baja' : contact.status === 'Dado de baja' ? 'Activo' : contact.status,
-      unsubscribedAt: status === 'Dado de baja' ? todayIso() : contact.unsubscribedAt
-    });
-    await loadAll(`Estado cambiado a ${status}.`);
-  }
-
-  async function addNote(contact: Contact) {
-    const note = prompt('Nueva nota');
-    if (!note) return;
-    const notes = [contact.notes, `[${new Date().toLocaleString()}] ${note}`].filter(Boolean).join('\n');
-    await db.contacts.update(contact.id!, { notes });
-    await loadAll('Nota guardada.');
-  }
-
-  async function saveList(event: FormEvent) {
+  async function createList(event: FormEvent) {
     event.preventDefault();
     const name = listName.trim();
-    if (!name) return setNotice('Escribe el nombre de la lista.');
-    if (editingListId) await db.lists.update(editingListId, { name });
-    else await db.lists.add({ name, createdAt: todayIso() });
+    if (!name) return setNotice(lang === 'en' ? 'List name is required.' : 'Escribe el nombre de la lista.');
+    const id = await db.lists.add({ name, createdAt: todayIso() });
     setListName('');
-    setEditingListId(null);
-    await loadAll(editingListId ? 'Lista actualizada.' : 'Lista creada.');
+    setSelectedListId(id);
+    await loadAll(lang === 'en' ? 'List created.' : 'Lista creada.');
   }
 
   async function deleteList(id?: number) {
-    if (!id || !confirm('Eliminar esta lista? Las personas no se eliminaran.')) return;
+    if (!id || !confirm(lang === 'en' ? 'Delete this list? Contacts will stay saved.' : '¿Eliminar esta lista? Los contactos permanecerán guardados.')) return;
     await db.transaction('rw', db.lists, db.contacts, async () => {
       await db.lists.delete(id);
       const affected = await db.contacts.where('listIds').equals(id).toArray();
       await Promise.all(affected.map((contact) => db.contacts.update(contact.id!, { listIds: contact.listIds.filter((listId) => listId !== id) })));
     });
-    await loadAll('Lista eliminada.');
+    setSelectedListId(null);
+    await loadAll(lang === 'en' ? 'List deleted.' : 'Lista eliminada.');
   }
 
-  async function duplicateList(list: InternalList) {
-    const newId = await db.lists.add({ name: `${list.name} copia`, description: list.description, createdAt: todayIso() });
-    const members = contacts.filter((contact) => contact.listIds.includes(list.id!));
-    await Promise.all(members.map((contact) => db.contacts.update(contact.id!, { listIds: [...contact.listIds, newId] })));
-    await loadAll('Lista duplicada con sus personas.');
-  }
-
-  async function addSelectedToList(listId: number) {
-    await Promise.all(
-      selectedContacts.map(async (id) => {
-        const contact = await db.contacts.get(id);
-        if (contact && !contact.listIds.includes(listId)) await db.contacts.update(id, { listIds: [...contact.listIds, listId] });
-      })
-    );
-    await loadAll('Personas anadidas a la lista.');
-  }
-
-  async function saveTemplate(event: FormEvent) {
+  async function saveBroadcastContact(event: FormEvent) {
     event.preventDefault();
-    if (!templateForm.name.trim() || !templateForm.body.trim()) return setNotice('El mensaje necesita nombre y texto.');
-    const payload = { ...templateForm, createdAt: templateForm.createdAt || todayIso() };
-    if (editingTemplateId) await db.templates.update(editingTemplateId, payload);
-    else await db.templates.add(payload);
-    setTemplateForm(blankTemplate);
-    setEditingTemplateId(null);
-    await loadAll(editingTemplateId ? 'Mensaje guardado actualizado.' : 'Mensaje guardado.');
+    if (!selectedList?.id) return;
+    const preview = normalizePhone(broadcastContact.phone, settings.defaultCountryCode);
+    if (!broadcastContact.firstName.trim()) return setNotice(lang === 'en' ? 'Name is required.' : 'Escribe el nombre.');
+    if (!preview.valid) return setNotice(preview.message);
+    if (isDuplicatePhone(preview.normalized, contacts.map((contact) => contact.phone))) return setNotice(lang === 'en' ? 'That phone already exists.' : 'Ese teléfono ya existe.');
+    await db.contacts.add({
+      firstName: broadcastContact.firstName.trim(),
+      lastName: broadcastContact.lastName.trim(),
+      phone: preview.normalized,
+      countryCode: settings.defaultCountryCode,
+      country: settings.defaultCountry,
+      category: 'Prospecto',
+      listIds: [selectedList.id],
+      tags: [`Idioma:${broadcastContact.language}`],
+      language: broadcastContact.language,
+      createdAt: todayIso(),
+      status: 'Activo',
+      preferredChannel: broadcastContact.channel,
+      consent: true,
+      consentDate: todayIso()
+    });
+    setBroadcastContact({ firstName: '', lastName: '', phone: '', language: 'Español', channel: 'WhatsApp' });
+    await loadAll(lang === 'en' ? 'Contact added.' : 'Contacto añadido.');
   }
 
-  async function deleteTemplate(id?: number) {
-    if (!id || !confirm('Eliminar este mensaje guardado?')) return;
-    await db.templates.delete(id);
-    await loadAll('Mensaje eliminado.');
+  async function importBroadcastCsv() {
+    if (!selectedList?.id) return;
+    const preview = parseContactsCsv(csvText, contacts.map((contact) => contact.phone), settings.defaultCountryCode);
+    if (!preview.valid.length) return setNotice(lang === 'en' ? 'No valid contacts found.' : 'No se encontraron contactos válidos.');
+    if (!confirm(`${lang === 'en' ? 'Import' : 'Importar'} ${preview.valid.length}?`)) return;
+    await db.contacts.bulkAdd(preview.valid.map((row) => csvRowToContact(row, [selectedList.id!], settings.defaultCountryCode, settings.defaultCountry)));
+    setCsvText('');
+    await loadAll(`${preview.valid.length} ${lang === 'en' ? 'contacts imported.' : 'contactos importados.'}`);
   }
 
-  function selectTemplate(id: string) {
-    const template = templates.find((item) => item.id === Number(id));
-    setCampaignForm((current) => ({ ...current, templateId: template?.id, message: template?.body || current.message }));
+  async function importBroadcastPaste() {
+    if (!selectedList?.id) return;
+    const parsed = parsePastedProspects(pasteText, contacts.map((contact) => contact.phone), settings.defaultCountryCode);
+    if (!parsed.contacts.length) return setNotice(lang === 'en' ? 'No valid contacts found.' : 'No se encontraron contactos válidos.');
+    await db.contacts.bulkAdd(parsed.contacts.map((contact) => ({ ...contact, listIds: [selectedList.id!], tags: withLanguageTag(contact, 'Español'), language: 'Español' as ContactLanguage })));
+    setPasteText('');
+    await loadAll(`${parsed.contacts.length} ${lang === 'en' ? 'contacts imported.' : 'contactos importados.'}`);
   }
 
-  async function handleImage(event: ChangeEvent<HTMLInputElement>) {
+  async function importFromDeviceContacts(target: 'broadcast' | 'follow') {
+    const nav = navigator as Navigator & { contacts?: { select: (props: string[], options: { multiple: boolean }) => Promise<Array<{ name?: string[]; tel?: string[] }>> } };
+    if (!nav.contacts?.select) return setNotice(lang === 'en' ? 'Device contact picker is not available here. Use CSV, paste, or manual entry.' : 'La selección de contactos del dispositivo no está disponible aquí. Usa CSV, pegar lista o entrada manual.');
+    const picked = await nav.contacts.select(['name', 'tel'], { multiple: true });
+    if (!picked.length) return;
+    if (target === 'broadcast' && selectedList?.id) {
+      const rows: Contact[] = [];
+      for (const item of picked) {
+        const name = item.name?.[0] || '';
+        const phone = normalizePhone(item.tel?.[0] || '', settings.defaultCountryCode);
+        if (name && phone.valid && !contacts.some((contact) => contact.phone === phone.normalized)) {
+          rows.push({
+            firstName: name.split(/\s+/)[0] || name,
+            lastName: name.split(/\s+/).slice(1).join(' '),
+            phone: phone.normalized,
+            countryCode: settings.defaultCountryCode,
+            country: settings.defaultCountry,
+            category: 'Prospecto',
+            listIds: [selectedList.id],
+            tags: ['Idioma:Español'],
+            language: 'Español',
+            createdAt: todayIso(),
+            status: 'Activo',
+            preferredChannel: 'WhatsApp',
+            consent: true,
+            consentDate: todayIso()
+          });
+        }
+      }
+      if (rows.length) await db.contacts.bulkAdd(rows);
+    }
+    await loadAll(lang === 'en' ? 'Device contacts reviewed.' : 'Contactos del dispositivo revisados.');
+  }
+
+  async function handleMediaFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
-      if (file.size > 8_000_000) throw new Error('La imagen supera 8 MB. Usa una version mas liviana.');
-      const compressed = await compressImage(file);
-      setCampaignImage({ name: file.name, type: file.type, dataUrl: compressed.dataUrl, size: compressed.size, updatedAt: todayIso() });
-      setNotice('Imagen preparada localmente.');
+      if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) throw new Error(lang === 'en' ? 'Use an image or compatible short video.' : 'Usa una imagen o video corto compatible.');
+      if (file.type.startsWith('video/') && file.size > 25_000_000) throw new Error(lang === 'en' ? 'This video is too large for local storage.' : 'Este video es muy grande para guardarlo localmente.');
+      const payload = file.type.startsWith('image/') ? await compressImage(file) : { dataUrl: await fileToDataUrl(file), size: file.size };
+      await db.mediaAssets.add({
+        name: assetName.trim() || file.name,
+        type: file.type,
+        dataUrl: payload.dataUrl,
+        size: payload.size,
+        kind: file.type.startsWith('image/') ? 'image' : 'video',
+        createdAt: todayIso()
+      });
+      setAssetName('');
+      await loadAll(lang === 'en' ? 'Media saved.' : 'Media guardada.');
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'No se pudo guardar la imagen.');
+      setNotice(error instanceof Error ? error.message : 'No se pudo guardar el archivo.');
+    } finally {
+      if (event.target) event.target.value = '';
     }
   }
 
-  async function createCampaign(event?: FormEvent) {
+  async function deleteMedia(id?: number) {
+    if (!id || !confirm(lang === 'en' ? 'Delete this media item?' : '¿Eliminar este archivo?')) return;
+    await db.mediaAssets.delete(id);
+    if (selectedMediaId === id) setSelectedMediaId('');
+    await loadAll(lang === 'en' ? 'Media deleted.' : 'Media eliminada.');
+  }
+
+  function previewBroadcastContacts() {
+    if (!selectedList?.id) return [];
+    if (audience === 'Manual') return listContacts.filter((contact) => selectedBroadcastContactIds.includes(contact.id || 0));
+    return listContacts.filter((contact) => contactLanguage(contact) === audience);
+  }
+
+  async function createBroadcastQueue(event?: FormEvent) {
     event?.preventDefault();
-    if (!campaignForm.message.trim()) return setNotice('Escribe o selecciona un mensaje.');
-    if (messageNeedsFeelGreatLink(campaignForm.message) && !isValidFeelGreatLink(settings.feelGreatLink || '')) {
-      setProfileOpen(true);
-      return setNotice('Añade tu Feel Great Link en tu perfil para utilizar este mensaje.');
-    }
-    if (campaignPreview.contacts.length === 0) return setNotice('No hay personas validas para comenzar.');
-    if (!confirm(`Comenzar envios para ${campaignPreview.contacts.length} personas?`)) return;
-    const campaign: Campaign = {
-      ...campaignForm,
-      name: campaignForm.name.trim() || `Envio Golden Team ${new Date().toLocaleDateString()}`,
-      image: campaignImage,
+    if (!selectedList?.id) return;
+    const targetContacts = previewBroadcastContacts();
+    if (!targetContacts.length) return setNotice(lang === 'en' ? 'No contacts selected.' : 'No hay contactos seleccionados.');
+    const missingMessage = targetContacts.some((contact) => contactLanguage(contact) === 'English' ? !messageEn.trim() : !messageEs.trim());
+    if (missingMessage && !selectedMediaId) return setNotice(lang === 'en' ? 'Write a message or select media.' : 'Escribe un mensaje o selecciona media.');
+    if (!confirm(`${lang === 'en' ? 'Start queue for' : 'Comenzar envío para'} ${targetContacts.length}?`)) return;
+    await db.lists.update(selectedList.id, { lastMessageEs: messageEs, lastMessageEn: messageEn });
+    const campaignId = await db.campaigns.add({
+      name: `${selectedList.name} ${new Date().toLocaleDateString()}`,
+      message: messageEs || messageEn,
+      listIds: [selectedList.id],
+      contactIds: targetContacts.map((contact) => contact.id!).filter(Boolean),
+      channel: broadcastChannel,
+      mediaAssetId: selectedMediaId || undefined,
+      audienceLanguage: audience,
       createdAt: todayIso()
-    };
-    const campaignId = await db.campaigns.add(campaign);
-    const items: QueueItem[] = campaignPreview.contacts.map((contact) => {
-      const names = contact.listIds.map((id) => lists.find((list) => list.id === id)?.name).filter(Boolean) as string[];
+    });
+    const items: QueueItem[] = targetContacts.map((contact) => {
+      const language = contactLanguage(contact);
+      const baseMessage = language === 'English' ? messageEn : messageEs;
       return {
         campaignId,
         contactId: contact.id!,
         contactSnapshot: contact,
-        listNames: names,
-        channel: campaign.channel === 'Ambos' ? contact.preferredChannel : campaign.channel,
-        personalizedMessage: personalizeMessage(campaign.message, contact, names[0] || '', messageContext()),
+        listNames: [selectedList.name],
+        channel: broadcastChannel === 'Ambos' ? contact.preferredChannel : broadcastChannel,
+        language,
+        mediaAssetId: selectedMediaId || undefined,
+        personalizedMessage: personalizeMessage(baseMessage, contact, selectedList.name, messageContext()),
         status: 'Pendiente',
         createdAt: todayIso()
       };
     });
     await db.queue.bulkAdd(items);
-    await Promise.all(campaignPreview.contacts.map((contact) => setBusinessStatus(contact, 'Mensaje pendiente')));
-    setCampaignForm(blankCampaign);
-    setCampaignImage(undefined);
-    setSendStep(3);
     setActiveCampaignId(campaignId);
-    await loadAll('Personas pendientes preparadas.');
+    setQueueIndex(0);
+    await loadAll(lang === 'en' ? 'Queue prepared.' : 'Cola preparada.');
   }
 
   async function setQueueStatus(item: QueueItem, status: QueueStatus, advance = false) {
-    await db.queue.update(item.id!, {
+    if (!item.id) return;
+    await db.queue.update(item.id, {
       status,
       openedAt: status === 'Abierto' ? todayIso() : item.openedAt,
       completedAt: ['Enviado', 'Omitido', 'Fallido'].includes(status) ? todayIso() : item.completedAt
     });
-    if (status === 'Abierto') await setBusinessStatus(item.contactSnapshot, 'Contactado');
-    if (status === 'Enviado') await setBusinessStatus(item.contactSnapshot, 'Contactado');
-    await loadAll(`Estado cambiado a ${status}.`);
+    await loadAll(`${lang === 'en' ? 'Status' : 'Estado'}: ${status}`);
     if (advance) setQueueIndex((index) => Math.min(index + 1, selectedQueue.length - 1));
   }
 
   async function copyMessage(message: string) {
     await navigator.clipboard.writeText(message);
-    setNotice('Mensaje copiado.');
+    setNotice(lang === 'en' ? 'Message copied.' : 'Mensaje copiado.');
   }
 
-  async function openWhatsApp(item: QueueItem | Contact, message?: string) {
-    const contact = 'contactSnapshot' in item ? item.contactSnapshot : item;
-    const text = 'personalizedMessage' in item ? item.personalizedMessage : message || '';
-    if (!online) setNotice('Estas sin conexion. Puedes copiar el mensaje; WhatsApp necesita conexion.');
-    window.open(buildWhatsAppLink(contact.phone, text), '_blank', 'noopener,noreferrer');
-    if ('personalizedMessage' in item) await setQueueStatus(item, 'Abierto');
-  }
-
-  async function openSms(item: QueueItem | Contact, message?: string) {
-    const contact = 'contactSnapshot' in item ? item.contactSnapshot : item;
-    const text = 'personalizedMessage' in item ? item.personalizedMessage : message || '';
-    window.location.href = buildSmsLink(contact.phone, text);
-    if ('personalizedMessage' in item) await setQueueStatus(item, 'Abierto');
-  }
-
-  function callContact(contact: Contact) {
-    window.location.href = `tel:${contact.phone}`;
-  }
-
-  async function importCsv() {
-    const preview = parseContactsCsv(csvText, contacts.map((contact) => contact.phone), csvDefaultCode);
-    if (preview.invalid.length || preview.duplicates.length) {
-      setNotice(`CSV revisado: ${preview.valid.length} validos, ${preview.invalid.length} con errores, ${preview.duplicates.length} duplicados.`);
+  async function shareQueueMedia(item?: QueueItem) {
+    const asset = mediaAssets.find((media) => media.id === (item?.mediaAssetId || activeCampaign?.mediaAssetId));
+    if (!asset) return setNotice(lang === 'en' ? 'No media selected.' : 'No hay media seleccionada.');
+    if (asset.kind === 'image') setNotice(await shareImage(asset.dataUrl, asset.name, asset.type));
+    else {
+      if (navigator.share) await navigator.share({ title: asset.name, text: asset.name });
+      setNotice(lang === 'en' ? 'If the app cannot attach video, share it manually from your files.' : 'Si la app no adjunta el video, compártelo manualmente desde tus archivos.');
     }
-    if (!preview.valid.length) return;
-    if (!confirm(`Importar ${preview.valid.length} personas validas?`)) return;
-    await db.contacts.bulkAdd(preview.valid.map((row) => csvRowToContact(row, [], csvDefaultCode, settings.defaultCountry)));
-    setCsvText('');
-    await loadAll('Personas importadas desde CSV.');
   }
 
-  async function importPastedProspects() {
-    const parsed = parsePastedProspects(pastedProspects, contacts.map((contact) => contact.phone), csvDefaultCode);
-    if (!parsed.contacts.length) return setNotice(`No se encontraron prospectos válidos. Errores: ${parsed.invalid.length}. Duplicados: ${parsed.duplicates.length}.`);
-    if (!confirm(`Importar ${parsed.contacts.length} prospectos? ${parsed.invalid.length} líneas excluidas, ${parsed.duplicates.length} duplicados.`)) return;
-    await db.contacts.bulkAdd(parsed.contacts);
-    setPastedProspects('');
-    await loadAll('Prospectos importados desde lista pegada.');
+  async function openWhatsAppFor(target: QueueItem | FollowUpTask | Contact, message?: string) {
+    const phone = 'contactSnapshot' in target ? target.contactSnapshot.phone : target.phone;
+    const text = 'personalizedMessage' in target ? target.personalizedMessage : message || ('message' in target ? target.message : '');
+    if (!online) setNotice(lang === 'en' ? 'WhatsApp may need connection.' : 'WhatsApp puede requerir conexión.');
+    window.open(buildWhatsAppLink(phone, text), '_blank', 'noopener,noreferrer');
+    if ('personalizedMessage' in target) await setQueueStatus(target, 'Abierto');
   }
 
-  async function convertProspectToMember(contact: Contact) {
-    if (!contact.id) return;
-    if (members.some((member) => member.phone === contact.phone)) return setNotice('Ese teléfono ya existe en Miembros.');
-    if (!confirm('Convertir este prospecto en miembro activo?')) return;
-    const purchaseDate = prompt('Fecha de compra (YYYY-MM-DD)', todayKey()) || todayKey();
-    const protocolStartDate = prompt('Fecha de inicio del protocolo (YYYY-MM-DD, opcional)', '') || '';
-    const member: Member = {
-      firstName: contact.firstName,
-      lastName: contact.lastName,
-      phone: contact.phone,
-      countryCode: contact.countryCode,
-      country: contact.country,
-      email: contact.email,
-      purchaseDate,
-      protocolStartDate,
-      preferredChannel: contact.preferredChannel === 'SMS' ? 'SMS' : 'WhatsApp',
-      purchaseType: 'No sé',
-      interest: 'Solo protocolo',
-      notes: contact.notes,
-      programActive: Boolean(protocolStartDate),
-      programStatus: protocolStartDate ? 'Activo' : 'Sin iniciar',
-      weeklyEventsActive: false,
-      createdAt: todayIso(),
-      convertedFromContactId: contact.id
-    };
-    const memberId = await db.members.add(member);
-    await db.members.put({ ...member, id: memberId });
-    if (protocolStartDate) await regenerateMemberTasks({ ...member, id: memberId });
-    await setBusinessStatus(contact, 'Cerrado');
-    setSelectedPersonId(null);
-    setActive('miembros');
-    await loadAll('Prospecto convertido en miembro activo.');
+  async function openSmsFor(target: QueueItem | FollowUpTask | Contact, message?: string) {
+    const phone = 'contactSnapshot' in target ? target.contactSnapshot.phone : target.phone;
+    const text = 'personalizedMessage' in target ? target.personalizedMessage : message || ('message' in target ? target.message : '');
+    window.location.href = buildSmsLink(phone, text);
+    if ('personalizedMessage' in target) await setQueueStatus(target, 'Abierto');
   }
 
-  async function saveWeeklyEvent(eventItem: WeeklyEvent, patch: Partial<WeeklyEvent>) {
-    if (!eventItem.id) return;
-    await db.weeklyEvents.update(eventItem.id, { ...patch, updatedAt: todayIso() });
-    await loadAll('Reunión actualizada.');
-  }
-
-  async function exportBackup() {
-    const backup = {
-      app: 'difusion-local-privada' as const,
-      version: 1 as const,
-      exportedAt: todayIso(),
-      contacts,
-      lists,
-      templates,
-      campaigns,
-      queue,
-      members,
-      tasks,
-      weeklyEvents,
-      settings
-    };
-    downloadFile(JSON.stringify(backup, null, 2), `backup-golden-team-${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
-    setNotice('Copia de seguridad exportada.');
-  }
-
-  async function restoreBackup() {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(backupText);
-    } catch {
-      return setNotice('El JSON del backup no es valido.');
-    }
-    if (!validateBackup(parsed)) return setNotice('El archivo no tiene la estructura esperada.');
-    if (!confirm(`Restaurar backup: ${backupSummary(parsed)}?`)) return;
-    if (restoreMode === 'replace') {
-      await db.transaction('rw', [db.contacts, db.lists, db.templates, db.campaigns, db.queue, db.members, db.tasks, db.weeklyEvents, db.settings], async () => {
-        await Promise.all([db.contacts.clear(), db.lists.clear(), db.templates.clear(), db.campaigns.clear(), db.queue.clear(), db.members.clear(), db.tasks.clear(), db.weeklyEvents.clear()]);
-        await db.contacts.bulkPut(parsed.contacts);
-        await db.lists.bulkPut(parsed.lists);
-        await db.templates.bulkPut(parsed.templates);
-        await db.campaigns.bulkPut(parsed.campaigns);
-        await db.queue.bulkPut(parsed.queue);
-        await db.members.bulkPut(parsed.members || []);
-        await db.tasks.bulkPut(parsed.tasks || []);
-        await db.weeklyEvents.bulkPut(parsed.weeklyEvents || []);
-        await db.settings.put(parsed.settings);
-      });
-    } else {
-      const existingPhones = new Set(contacts.map((contact) => contact.phone));
-      await db.contacts.bulkAdd(parsed.contacts.filter((contact) => !existingPhones.has(contact.phone)).map(({ id: _id, ...contact }) => contact));
-      await db.lists.bulkAdd(parsed.lists.map(({ id: _id, ...list }) => list));
-      await db.templates.bulkAdd(parsed.templates.map(({ id: _id, ...template }) => template));
-      const campaignIdMap = new Map<number, number>();
-      for (const campaign of parsed.campaigns) {
-        const oldId = campaign.id;
-        const { id: _id, ...campaignWithoutId } = campaign;
-        const newId = await db.campaigns.add(campaignWithoutId);
-        if (oldId) campaignIdMap.set(oldId, newId);
-      }
-      await db.queue.bulkAdd(parsed.queue.filter((item) => campaignIdMap.has(item.campaignId)).map(({ id: _id, ...item }) => ({ ...item, campaignId: campaignIdMap.get(item.campaignId)! })));
-      await db.members.bulkAdd((parsed.members || []).filter((member) => !members.some((existing) => existing.phone === member.phone)).map(({ id: _id, ...member }) => member));
-      await db.tasks.bulkAdd((parsed.tasks || []).map(({ id: _id, ...task }) => task));
-      await db.weeklyEvents.bulkAdd((parsed.weeklyEvents || []).map(({ id: _id, ...event }) => event));
-    }
-    setBackupText('');
-    await loadAll('Backup restaurado.');
-  }
-
-  async function saveSettings(event: FormEvent) {
+  async function saveFollowPerson(event: FormEvent) {
     event.preventDefault();
-    const feelGreatLink = normalizeFeelGreatLink(settings.feelGreatLink || '');
-    if (feelGreatLink && !isValidFeelGreatLink(feelGreatLink)) return setNotice('Revisa que hayas pegado tu enlace completo.');
-    const normalizedPersonal = normalizePhone(settings.personalNumber, settings.defaultCountryCode);
-    await db.settings.put({ ...settings, feelGreatLink, personalNumber: normalizedPersonal.valid ? normalizedPersonal.normalized : settings.personalNumber });
-    await loadAll('Perfil guardado.');
-  }
-
-  async function deleteAllData() {
-    if (doubleDelete !== 'BORRAR') return setNotice('Escribe BORRAR para confirmar.');
-    if (!confirm('Borrar todos los datos locales de este dispositivo?')) return;
-    await clearAllData();
-    setDoubleDelete('');
-    await loadAll('Todos los datos locales fueron borrados.');
-  }
-
-  async function duplicateCampaign(campaign: Campaign) {
-    const { id: _id, createdAt: _createdAt, ...rest } = campaign;
-    const newId = await db.campaigns.add({ ...rest, name: `${campaign.name} copia`, createdAt: todayIso() });
-    setActiveCampaignId(newId);
-    setActive('laFitness');
-    await loadAll('Envio duplicado.');
-  }
-
-  async function retryFailed(campaign: Campaign) {
-    const failed = queue.filter((item) => item.campaignId === campaign.id && item.status === 'Fallido');
-    if (!failed.length) return setNotice('No hay fallidos para reintentar.');
-    await Promise.all(failed.map((item) => db.queue.update(item.id!, { status: 'Pendiente', completedAt: undefined })));
-    setActiveCampaignId(campaign.id!);
-    setActive('laFitness');
-    await loadAll('Fallidos devueltos a pendientes.');
-  }
-
-  async function exportCampaignSummary(campaign: Campaign) {
-    const items = queue.filter((item) => item.campaignId === campaign.id);
-    const csv = ['nombre,telefono,canal,estado', ...items.map((item) => `${item.contactSnapshot.firstName} ${item.contactSnapshot.lastName},${item.contactSnapshot.phone},${item.channel},${item.status}`)].join('\n');
-    downloadFile(csv, `resumen-${campaign.name}.csv`, 'text/csv');
-  }
-
-  const nav = (
-    <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-3 pb-[calc(env(safe-area-inset-bottom)+0.55rem)] pt-2 backdrop-blur lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:border-r lg:border-t-0 lg:px-5 lg:py-6">
-      <div className="mb-7 hidden lg:block">
-        <div className="flex items-center gap-3">
-          <img src={logoSrc} alt="Golden Team" className="h-12 w-12 rounded-3xl object-cover" />
-          <div>
-            <p className="text-lg font-black text-ink">Golden Team Connect</p>
-            <p className="text-xs leading-tight text-slate-500">Organiza. Da seguimiento. Mantente conectado.</p>
-          </div>
-        </div>
-      </div>
-      <div className="grid grid-cols-4 gap-2 lg:grid-cols-1">
-        {mainSections.map((section) => (
-          <button key={section.id} onClick={() => setActive(section.id)} className={`flex min-h-[62px] flex-col items-center justify-center gap-1 rounded-2xl px-2 text-xs font-bold transition lg:min-h-12 lg:flex-row lg:justify-start lg:px-4 lg:text-base ${active === section.id ? 'bg-brand text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'}`}>
-            {section.icon}
-            <span>{section.label}</span>
-          </button>
-        ))}
-      </div>
-    </nav>
-  );
-
-  const personCard = (contact: Contact) => {
-    const business = commercialStatus(contact);
-    const lastQueue = [...queue].reverse().find((item) => item.contactId === contact.id);
-    return (
-      <article key={contact.id} className="rounded-[1.4rem] border border-slate-100 bg-white p-4 shadow-sm">
-        <button onClick={() => setSelectedPersonId(contact.id!)} className="w-full text-left">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h3 className="truncate text-lg font-black text-ink">{contact.firstName} {contact.lastName}</h3>
-              <p className="text-sm text-slate-500">{contact.phone}</p>
-              <p className="mt-1 text-sm text-slate-500">{tagValue(contact, 'Idioma', 'Espanol')} · {tagValue(contact, 'Gimnasio', listNames(contact.listIds) || 'LA Fitness')}</p>
-            </div>
-            <Badge tone={statusTone(business)}><Circle size={8} fill="currentColor" />{business}</Badge>
-          </div>
-          <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-500">
-            <span>Registro: {shortDate(contact.createdAt)}</span>
-            <span>Ultima: {lastQueue ? shortDate(lastQueue.openedAt || lastQueue.completedAt || lastQueue.createdAt) : 'Sin contacto'}</span>
-          </div>
-        </button>
-      </article>
-    );
-  };
-
-  const memberCard = (member: Member) => {
-    const day = currentProgramDay(member.protocolStartDate);
-    const memberPendingTasks = tasks.filter((task) => task.memberId === member.id && task.status !== 'Completada');
-    const nextTask = memberPendingTasks.sort((a, b) => `${a.dueDate} ${a.dueTime}`.localeCompare(`${b.dueDate} ${b.dueTime}`))[0];
-    const progress = day === null ? 0 : Math.min(100, Math.round((Math.min(day, 30) / 30) * 100));
-    return (
-      <article key={member.id} className="rounded-[1.4rem] border border-slate-100 bg-white p-4 shadow-sm">
-        <button onClick={() => setSelectedMemberId(member.id!)} className="w-full text-left">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h3 className="truncate text-lg font-black text-ink">{memberName(member)}</h3>
-              <p className="text-sm text-slate-500">{member.phone} · {member.preferredChannel}</p>
-              <p className="mt-1 text-sm text-slate-500">{member.interest} · {member.purchaseType}</p>
-            </div>
-            <Badge tone={member.programStatus === 'Activo' ? 'good' : member.programStatus === 'Pausado' ? 'warn' : 'neutral'}>{member.programStatus}</Badge>
-          </div>
-          <div className="mt-4">
-            <div className="flex justify-between text-xs font-bold text-slate-500"><span>{day === null ? 'Sin inicio' : `Día ${Math.min(day, 30)} de 30`}</span><span>{nextTask ? `${nextTask.title} · ${shortDate(nextTask.dueDate)}` : 'Sin tarea pendiente'}</span></div>
-            <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-brand" style={{ width: `${progress}%` }} /></div>
-          </div>
-        </button>
-      </article>
-    );
-  };
-
-  const renderMembers = () => {
-    const filteredMembers = members.filter((member) => `${member.firstName} ${member.lastName} ${member.phone}`.toLowerCase().includes(memberSearch.toLowerCase()));
-    return (
-      <SectionShell>
-        <Card>
-          <SectionTitle title="Miembros" subtitle="Personas que ya compraron o ya están registradas" action={<PrimaryButton onClick={resetMemberForm}><Plus size={18} />Añadir miembro</PrimaryButton>} />
-          <div className="mt-4 relative">
-            <Search className="pointer-events-none absolute left-4 top-3.5 text-slate-400" size={20} />
-            <input className="input pl-12" placeholder="Buscar miembro" value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} />
-          </div>
-        </Card>
-
-        <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
-          <Card>
-            <SectionTitle title={editingMemberId ? 'Editar miembro' : 'Añadir miembro'} subtitle="La fecha de inicio calcula el programa" />
-            <form className="mt-4 grid gap-3" onSubmit={saveMember}>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Nombre"><input className="input" value={memberForm.firstName} onChange={(event) => setMemberForm((current) => ({ ...current, firstName: event.target.value }))} /></Field>
-                <Field label="Apellido opcional"><input className="input" value={memberForm.lastName || ''} onChange={(event) => setMemberForm((current) => ({ ...current, lastName: event.target.value }))} /></Field>
-              </div>
-              <div className="grid grid-cols-[86px_1fr] gap-3">
-                <Field label="Código"><input className="input" value={memberForm.countryCode} onChange={(event) => setMemberForm((current) => ({ ...current, countryCode: event.target.value }))} /></Field>
-                <Field label="Teléfono" error={memberPhoneDuplicate ? 'Este número ya existe.' : undefined}><input className="input" value={memberForm.phone} onChange={(event) => setMemberForm((current) => ({ ...current, phone: event.target.value }))} inputMode="tel" /></Field>
-              </div>
-              <Badge tone={memberPhonePreview.valid && !memberPhoneDuplicate ? 'good' : 'warn'}>{memberPhonePreview.message}</Badge>
-              <Field label="Email opcional"><input className="input" type="email" value={memberForm.email || ''} onChange={(event) => setMemberForm((current) => ({ ...current, email: event.target.value }))} /></Field>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="País opcional"><input className="input" value={memberForm.country || ''} onChange={(event) => setMemberForm((current) => ({ ...current, country: event.target.value }))} /></Field>
-                <Field label="Canal preferido"><select className="input" value={memberForm.preferredChannel} onChange={(event) => setMemberForm((current) => ({ ...current, preferredChannel: event.target.value as 'WhatsApp' | 'SMS' }))}><option>WhatsApp</option><option>SMS</option></select></Field>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Fecha de compra"><input className="input" type="date" value={memberForm.purchaseDate} onChange={(event) => setMemberForm((current) => ({ ...current, purchaseDate: event.target.value }))} /></Field>
-                <Field label="Entrega estimada opcional"><input className="input" type="date" value={memberForm.estimatedDeliveryDate || ''} onChange={(event) => setMemberForm((current) => ({ ...current, estimatedDeliveryDate: event.target.value }))} /></Field>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Inicio del protocolo"><input className="input" type="date" value={memberForm.protocolStartDate || ''} onChange={(event) => setMemberForm((current) => ({ ...current, protocolStartDate: event.target.value, programActive: Boolean(event.target.value) }))} /></Field>
-                <Field label="Hora de tareas"><input className="input" type="time" value={memberTaskTime} onChange={(event) => setMemberTaskTime(event.target.value)} /></Field>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Tipo de compra"><select className="input" value={memberForm.purchaseType} onChange={(event) => setMemberForm((current) => ({ ...current, purchaseType: event.target.value as MemberPurchaseType }))}>{purchaseTypes.map((item) => <option key={item}>{item}</option>)}</select></Field>
-                <Field label="Interés"><select className="input" value={memberForm.interest} onChange={(event) => setMemberForm((current) => ({ ...current, interest: event.target.value as MemberInterest }))}>{memberInterests.map((item) => <option key={item}>{item}</option>)}</select></Field>
-              </div>
-              <Field label="Próximo pedido opcional"><input className="input" type="date" value={memberForm.nextOrderDate || ''} onChange={(event) => setMemberForm((current) => ({ ...current, nextOrderDate: event.target.value }))} /></Field>
-              <label className="flex items-start gap-3 rounded-3xl border border-slate-200 p-3 text-sm font-bold"><input type="checkbox" className="mt-1 h-5 w-5" checked={memberForm.programActive} onChange={(event) => setMemberForm((current) => ({ ...current, programActive: event.target.checked }))} />Activar programa de 30 días</label>
-              <label className="flex items-start gap-3 rounded-3xl border border-slate-200 p-3 text-sm font-bold"><input type="checkbox" className="mt-1 h-5 w-5" checked={Boolean(memberForm.weeklyEventsActive)} disabled={!isBusinessEligible(memberForm)} onChange={(event) => setMemberForm((current) => ({ ...current, weeklyEventsActive: event.target.checked }))} />Activar reuniones semanales</label>
-              <Field label="Notas"><textarea className="input min-h-28" value={memberForm.notes || ''} onChange={(event) => setMemberForm((current) => ({ ...current, notes: event.target.value }))} /></Field>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <PrimaryButton type="submit"><Check size={18} />Guardar miembro</PrimaryButton>
-                <SecondaryButton onClick={resetMemberForm}><X size={18} />Limpiar</SecondaryButton>
-              </div>
-            </form>
-          </Card>
-
-          <div className="grid gap-3">
-            {filteredMembers.map(memberCard)}
-          </div>
-        </div>
-
-        {selectedMember ? (
-          <div className="fixed inset-0 z-40 bg-ink/35 p-4 pt-[calc(env(safe-area-inset-top)+1rem)] backdrop-blur-sm" onClick={() => setSelectedMemberId(null)}>
-            <div className="mx-auto max-h-[90vh] max-w-xl overflow-auto rounded-[2rem] bg-white p-5 shadow-soft" onClick={(event) => event.stopPropagation()}>
-              <SectionTitle title={memberName(selectedMember)} subtitle={`${selectedMember.phone} · Día ${currentProgramDay(selectedMember.protocolStartDate) ?? '-'} de 30`} action={<IconButton label="Cerrar" onClick={() => setSelectedMemberId(null)}><X /></IconButton>} />
-              <div className="mt-4 grid gap-3">
-                <Badge tone={selectedMember.programStatus === 'Activo' ? 'good' : 'neutral'}>{selectedMember.programStatus}</Badge>
-                <p className="text-sm text-slate-600">Inicio: {shortDate(selectedMember.protocolStartDate)} · Tipo: {selectedMember.purchaseType}</p>
-                <p className="text-sm text-slate-600">Interés: {selectedMember.interest}</p>
-                <div className="rounded-3xl bg-slate-50 p-4"><p className="font-bold">Notas</p><p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{selectedMember.notes || 'Sin notas.'}</p></div>
-                <SectionTitle title="Próxima tarea" subtitle={tasks.find((task) => task.memberId === selectedMember.id && task.status !== 'Completada')?.title || 'Sin tarea pendiente'} />
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  <SecondaryButton onClick={() => openWhatsApp({ ...selectedMember, id: selectedMember.id } as unknown as Contact, `Hola ${selectedMember.firstName}`)}><MessageCircle size={17} />WhatsApp</SecondaryButton>
-                  <SecondaryButton onClick={() => openSms({ ...selectedMember, id: selectedMember.id } as unknown as Contact, `Hola ${selectedMember.firstName}`)}><Smartphone size={17} />SMS</SecondaryButton>
-                  <SecondaryButton onClick={() => callContact({ ...selectedMember, id: selectedMember.id } as unknown as Contact)}><Phone size={17} />Llamar</SecondaryButton>
-                  <SecondaryButton onClick={() => editMember(selectedMember)}><Edit3 size={17} />Editar</SecondaryButton>
-                  <SecondaryButton onClick={() => pauseMemberProgram(selectedMember)}><CalendarClock size={17} />Pausar</SecondaryButton>
-                  <SecondaryButton onClick={() => finishMemberProgram(selectedMember)}><Check size={17} />Finalizar</SecondaryButton>
-                </div>
-                {selectedMember.programStatus === 'Completado' ? <PrimaryButton onClick={() => activateMonthlyFollowUp(selectedMember)}>Pasar a seguimiento mensual</PrimaryButton> : null}
-              </div>
-            </div>
-          </div>
-        ) : null}
-      </SectionShell>
-    );
-  };
-
-  const renderHome = () => (
-    <SectionShell>
-      <div className="rounded-[2rem] bg-gradient-to-br from-brand to-brandDark p-6 text-white shadow-soft">
-        <div className="flex items-center gap-3">
-          <img src={logoSrc} alt="Golden Team" className="h-12 w-12 rounded-2xl object-cover" />
-          <p className="text-sm font-semibold text-white/80">Herramienta interna de Golden Team.</p>
-        </div>
-        <h1 className="mt-4 text-3xl font-black tracking-normal">Hola, {displayName(settings)}</h1>
-        <p className="mt-1 max-w-xl text-white/80">Estas son tus acciones de hoy.</p>
-        <div className="mt-5 flex flex-wrap gap-2">
-          <Badge tone={online ? 'good' : 'warn'}>{online ? 'En linea' : 'Modo sin conexion'}</Badge>
-          <Badge tone="blue">{notice}</Badge>
-          <button onClick={() => setQuickLinkOpen((current) => !current)} className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-bold text-white">Mi enlace</button>
-        </div>
-        {quickLinkOpen ? (
-          <div className="mt-4 grid gap-2 rounded-3xl border border-white/15 bg-white/10 p-3 sm:inline-grid sm:grid-cols-3">
-            <button onClick={copyFeelGreatLink} className="rounded-2xl bg-white px-3 py-2 text-sm font-bold text-brand">Copiar</button>
-            <button onClick={shareFeelGreatLink} className="rounded-2xl bg-white px-3 py-2 text-sm font-bold text-brand">Compartir</button>
-            <button onClick={openFeelGreatLink} className="rounded-2xl bg-white px-3 py-2 text-sm font-bold text-brand">Abrir</button>
-          </div>
-        ) : null}
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <SectionTitle title="Miembros activos" subtitle="Acompañamiento de primeros 30 días" />
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Seguimientos para hoy</p><strong className="text-3xl text-ink">{todaysTasks.filter((task) => task.kind === 'Miembro').length}</strong></div>
-            <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Seguimientos vencidos</p><strong className="text-3xl text-ink">{overdueTasks.filter((task) => task.kind === 'Miembro').length}</strong></div>
-            <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Primeros 30 días</p><strong className="text-3xl text-ink">{activeMembers.filter((member) => member.programStatus === 'Activo').length}</strong></div>
-            <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Renovaciones próximas</p><strong className="text-3xl text-ink">{upcomingTasks.filter((task) => task.kind === 'Renovación').length}</strong></div>
-          </div>
-          <PrimaryButton className="mt-5 w-full" onClick={() => setActive('tareas')}><Bell size={18} />Ver seguimientos</PrimaryButton>
-        </Card>
-
-        <Card>
-          <SectionTitle title="Prospectos LA Fitness" subtitle="Cola manual de WhatsApp y SMS" />
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Mensajes pendientes</p><strong className="text-3xl text-ink">{queueTasks.length}</strong></div>
-            <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Sin respuesta</p><strong className="text-3xl text-ink">{laFitnessContacts.filter((contact) => ['No respondio', 'Sin respuesta'].includes(commercialStatus(contact))).length}</strong></div>
-            <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Seguimientos semanales</p><strong className="text-3xl text-ink">{laFitnessContacts.filter((contact) => commercialStatus(contact) === 'Seguimiento').length}</strong></div>
-            <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Envíos en progreso</p><strong className="text-3xl text-ink">{campaigns.filter((campaign) => queue.some((item) => item.campaignId === campaign.id && ['Pendiente', 'Abierto'].includes(item.status))).length}</strong></div>
-          </div>
-          <PrimaryButton className="mt-5 w-full" onClick={() => { setActive('laFitness'); setSendStep(3); }}><Send size={18} />Continuar envíos</PrimaryButton>
-        </Card>
-      </div>
-
-      <Card>
-        <SectionTitle title="Tareas de hoy" subtitle="Miembros, renovaciones, reuniones y LA Fitness" />
-        <div className="mt-4 grid gap-3">
-          {todaysTasks.length ? todaysTasks.slice(0, 8).map((task) => (
-            <button key={`${task.kind}-${task.id}`} onClick={() => { setSelectedTaskId(task.id || null); setActive('tareas'); }} className="flex items-center justify-between gap-3 rounded-3xl bg-slate-50 p-4 text-left">
-              <span className="min-w-0">
-                <span className="block truncate font-black">{task.contactName}</span>
-                <span className="block text-sm text-slate-500">{task.title} · Día {task.programDay ?? '-'} · {task.channel}</span>
-              </span>
-              <span className="shrink-0 text-sm font-bold text-brand">{task.dueTime}<ArrowRight className="ml-1 inline" size={17} /></span>
-            </button>
-          )) : <p className="rounded-3xl bg-slate-50 p-4 text-sm text-slate-500">No hay tareas para hoy. Al abrir la app se seguirán mostrando las vencidas y próximas.</p>}
-        </div>
-      </Card>
-    </SectionShell>
-  );
-
-  const renderPeople = () => (
-    <SectionShell>
-      <Card>
-        <SectionTitle title="Prospectos LA Fitness" subtitle="Personas que todavía no han comprado" action={<PrimaryButton onClick={resetContactForm}><Plus size={18} />Añadir prospecto</PrimaryButton>} />
-        <div className="mt-4 grid gap-3">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-4 top-3.5 text-slate-400" size={20} />
-            <input className="input pl-12" placeholder="Buscar por nombre, teléfono o ubicación" value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} />
-          </div>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {peopleFilters.map((filter) => (
-              <button key={filter} onClick={() => setPeopleFilter(filter)} className={`shrink-0 rounded-full px-4 py-2 text-sm font-bold ${peopleFilter === filter ? 'bg-brand text-white' : 'bg-slate-100 text-slate-600'}`}>{filter}</button>
-            ))}
-          </div>
-        </div>
-      </Card>
-
-      <div className="grid gap-4 xl:grid-cols-[390px_1fr]">
-        <Card>
-          <SectionTitle title={editingContactId ? 'Editar prospecto' : 'Añadir prospecto'} subtitle="LA Fitness: datos mínimos, seguimiento manual" />
-          <form className="mt-4 grid gap-3" onSubmit={saveContact}>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Nombre"><input className="input" value={contactForm.firstName} onChange={(event) => setContactForm((current) => ({ ...current, firstName: event.target.value }))} /></Field>
-              <Field label="Apellido"><input className="input" value={contactForm.lastName} onChange={(event) => setContactForm((current) => ({ ...current, lastName: event.target.value }))} /></Field>
-            </div>
-            <div className="grid grid-cols-[86px_1fr] gap-3">
-              <Field label="Codigo"><input className="input" value={contactForm.countryCode} onChange={(event) => setContactForm((current) => ({ ...current, countryCode: event.target.value }))} /></Field>
-              <Field label="Telefono" error={phoneDuplicate ? 'Este numero ya existe.' : undefined}><input className="input" value={contactForm.phone} onChange={(event) => setContactForm((current) => ({ ...current, phone: event.target.value }))} inputMode="tel" /></Field>
-            </div>
-            <Badge tone={phonePreview.valid && !phoneDuplicate ? 'good' : 'warn'}>{phonePreview.message}</Badge>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Idioma"><select className="input" value={contactLanguage} onChange={(event) => setContactLanguage(event.target.value)}>{languages.map((item) => <option key={item}>{item}</option>)}</select></Field>
-              <Field label="Gimnasio"><select className="input" value={contactGym} onChange={(event) => setContactGym(event.target.value)}>{laLocations.map((item) => <option key={item}>{item}</option>)}</select></Field>
-            </div>
-            <Field label="Correo"><input className="input" value={contactForm.email || ''} onChange={(event) => setContactForm((current) => ({ ...current, email: event.target.value }))} type="email" /></Field>
-            <Field label="Estado"><select className="input" value={contactBusinessStatus} onChange={(event) => setContactBusinessStatus(event.target.value as BusinessStatus)}>{businessStatuses.map((item) => <option key={item}>{item}</option>)}</select></Field>
-            <Field label="Próximo seguimiento"><input className="input" value={contactNextAction} onChange={(event) => setContactNextAction(event.target.value)} /></Field>
-            <Field label="Formula o muestra probada"><input className="input" value={contactProduct} onChange={(event) => setContactProduct(event.target.value)} /></Field>
-            <Field label="Notas"><textarea className="input min-h-28" value={contactForm.notes || ''} onChange={(event) => setContactForm((current) => ({ ...current, notes: event.target.value }))} /></Field>
-            <label className="flex items-start gap-3 rounded-3xl border border-slate-200 p-3 text-sm font-bold"><input type="checkbox" className="mt-1 h-5 w-5" checked={contactForm.consent} onChange={(event) => setContactForm((current) => ({ ...current, consent: event.target.checked }))} />Aceptó recibir comunicación de seguimiento.</label>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <PrimaryButton type="submit"><Check size={18} />Guardar</PrimaryButton>
-              <SecondaryButton onClick={resetContactForm}><X size={18} />Limpiar</SecondaryButton>
-            </div>
-          </form>
-        </Card>
-
-        <div className="grid gap-3">
-          {filteredContacts.map(personCard)}
-        </div>
-      </div>
-
-      {selectedPerson ? (
-        <div className="fixed inset-0 z-40 bg-ink/35 p-4 pt-[calc(env(safe-area-inset-top)+1rem)] backdrop-blur-sm" onClick={() => setSelectedPersonId(null)}>
-          <div className="mx-auto max-h-[90vh] max-w-xl overflow-auto rounded-[2rem] bg-white p-5 shadow-soft" onClick={(event) => event.stopPropagation()}>
-            <SectionTitle title={`${selectedPerson.firstName} ${selectedPerson.lastName}`} subtitle={`${selectedPerson.phone} · ${tagValue(selectedPerson, 'Gimnasio', 'LA Fitness')}`} action={<IconButton label="Cerrar" onClick={() => setSelectedPersonId(null)}><X /></IconButton>} />
-            <div className="mt-4 grid gap-3">
-              <Badge tone={statusTone(commercialStatus(selectedPerson))}>{commercialStatus(selectedPerson)}</Badge>
-              <p className="text-sm text-slate-600">Idioma: {tagValue(selectedPerson, 'Idioma', 'Espanol')}</p>
-              <p className="text-sm text-slate-600">Canal preferido: {selectedPerson.preferredChannel}</p>
-              <p className="text-sm text-slate-600">Registro: {shortDate(selectedPerson.createdAt)}</p>
-              <p className="text-sm text-slate-600">Proxima accion: {tagValue(selectedPerson, 'Proxima', 'Enviar mensaje')}</p>
-              <div className="rounded-3xl bg-slate-50 p-4">
-                <p className="font-bold">Notas</p>
-                <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{selectedPerson.notes || 'Sin notas.'}</p>
-              </div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                <SecondaryButton onClick={() => openWhatsApp(selectedPerson, `Hola ${selectedPerson.firstName}`)}><MessageCircle size={17} />WhatsApp</SecondaryButton>
-                <SecondaryButton onClick={() => openSms(selectedPerson, `Hola ${selectedPerson.firstName}`)}><Smartphone size={17} />SMS</SecondaryButton>
-                <SecondaryButton onClick={() => callContact(selectedPerson)}><Phone size={17} />Llamar</SecondaryButton>
-                <SecondaryButton onClick={() => addNote(selectedPerson)}><Plus size={17} />Nota</SecondaryButton>
-              </div>
-              <div className="grid gap-2">
-                <select className="input" value={commercialStatus(selectedPerson)} onChange={(event) => setBusinessStatus(selectedPerson, event.target.value as BusinessStatus)}>{businessStatuses.map((item) => <option key={item}>{item}</option>)}</select>
-                <div className="grid grid-cols-2 gap-2">
-                  <SecondaryButton onClick={() => editContact(selectedPerson)}><Edit3 size={17} />Editar</SecondaryButton>
-                {commercialStatus(selectedPerson) === 'Cerrado' || commercialStatus(selectedPerson) === 'Interesado' ? <SecondaryButton onClick={() => convertProspectToMember(selectedPerson)}><Users size={17} />Convertir en miembro</SecondaryButton> : null}
-                <SecondaryButton onClick={() => deleteContact(selectedPerson.id)}><Trash2 size={17} />Eliminar</SecondaryButton>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </SectionShell>
-  );
-
-  const renderSend = () => (
-    <SectionShell>
-      <Card>
-        <SectionTitle title="Flujo de envío LA Fitness" subtitle="Una persona a la vez. No se envía automáticamente." action={<Badge tone="blue">Paso {sendStep} de 3</Badge>} />
-        <div className="mt-4 grid grid-cols-3 gap-2">
-          {[1, 2, 3].map((step) => <button key={step} onClick={() => setSendStep(step as SendStep)} className={`rounded-2xl py-3 text-sm font-black ${sendStep === step ? 'bg-brand text-white' : 'bg-slate-100 text-slate-500'}`}>{step === 1 ? 'Destinatarios' : step === 2 ? 'Mensaje' : 'Revisar'}</button>)}
-        </div>
-      </Card>
-
-      {sendStep === 1 ? (
-        <Card>
-          <SectionTitle title="Elegir contactos" subtitle="Selecciona prospectos pendientes o una ubicación" />
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {['Todos los prospectos pendientes', 'Ubicacion especifica', 'Personas importadas hoy', 'Personas que no respondieron', 'Seguimiento semanal', 'Selección manual'].map((mode) => (
-              <button key={mode} onClick={() => setRecipientMode(mode)} className={`rounded-3xl border p-4 text-left font-bold ${recipientMode === mode ? 'border-brand bg-sky-50 text-brand' : 'border-slate-100 bg-white text-ink'}`}>{mode}</button>
-            ))}
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <Field label="Ubicacion"><select className="input" value={contactGym} onChange={(event) => setContactGym(event.target.value)}>{laLocations.map((item) => <option key={item}>{item}</option>)}</select></Field>
-            <Field label="Selección manual"><select multiple className="input min-h-32" value={campaignForm.contactIds.map(String)} onChange={(event) => setCampaignForm((current) => ({ ...current, contactIds: Array.from(event.target.selectedOptions).map((option) => Number(option.value)) }))}>{laFitnessContacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.firstName} {contact.lastName}</option>)}</select></Field>
-          </div>
-          <div className="mt-4 flex items-center justify-between rounded-3xl bg-slate-50 p-4">
-            <span className="font-bold">Seleccionados</span>
-            <strong className="text-3xl text-brand">{campaignPreview.contacts.length}</strong>
-          </div>
-          <PrimaryButton className="mt-4 w-full" onClick={() => setSendStep(2)}>Continuar<ChevronRight size={18} /></PrimaryButton>
-        </Card>
-      ) : null}
-
-      {sendStep === 2 ? (
-        <Card>
-          <SectionTitle title="Preparar mensaje" subtitle="Variables: nombre, mi enlace, ubicación o enlace de evento" />
-          <div className="mt-4 grid gap-3">
-            <Field label="Mensaje guardado"><select className="input" value={campaignForm.templateId || ''} onChange={(event) => selectTemplate(event.target.value)}><option value="">Sin mensaje guardado</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></Field>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Idioma"><select className="input" value={sendLanguage} onChange={(event) => setSendLanguage(event.target.value)}>{languages.map((item) => <option key={item}>{item}</option>)}</select></Field>
-              <Field label="Canal"><select className="input" value={campaignForm.channel} onChange={(event) => setCampaignForm((current) => ({ ...current, channel: event.target.value as Channel }))}>{channels.map((item) => <option key={item}>{item}</option>)}</select></Field>
-            </div>
-            <Field label="Texto"><textarea className="input min-h-44" value={campaignForm.message} onChange={(event) => setCampaignForm((current) => ({ ...current, message: event.target.value }))} placeholder="Hola {{nombre_contacto}}, ..." /></Field>
-            <div className="flex flex-wrap gap-2">
-              <SecondaryButton onClick={() => insertMessageVariable('{{nombre_contacto}}')}><Plus size={16} />Añadir nombre</SecondaryButton>
-              <SecondaryButton onClick={() => insertMessageVariable('{{feelgreat_link}}')}><Plus size={16} />Añadir mi enlace</SecondaryButton>
-            </div>
-            <p className="text-sm text-slate-500">{campaignForm.message.length} caracteres · {smsSegments(campaignForm.message)} segmento(s) SMS</p>
-            <div className="rounded-3xl border border-slate-100 p-4">
-              <input ref={fileInputRef} type="file" className="hidden" accept="image/*" capture="environment" onChange={handleImage} />
-              <div className="flex flex-wrap gap-2">
-                <SecondaryButton onClick={() => fileInputRef.current?.click()}><FileImage size={17} />Imagen opcional</SecondaryButton>
-                {campaignImage ? <SecondaryButton onClick={() => setCampaignImage(undefined)}><Trash2 size={17} />Quitar</SecondaryButton> : null}
-              </div>
-              {campaignImage ? <img src={campaignImage.dataUrl} alt="Vista previa" className="mt-3 max-h-64 rounded-3xl object-cover" /> : <p className="mt-2 text-sm text-slate-500">La imagen se comparte o descarga manualmente. No se adjunta automáticamente al texto.</p>}
-            </div>
-            <div className="rounded-3xl bg-slate-50 p-4">
-              <p className="font-bold">Vista previa</p>
-              <p className="mt-1 whitespace-pre-wrap text-slate-600">{campaignPreview.contacts[0] ? personalizeMessage(campaignForm.message, campaignPreview.contacts[0], listNames(campaignPreview.contacts[0].listIds).split(', ')[0] || '', messageContext()) : 'Selecciona destinatarios.'}</p>
-            </div>
-            <PrimaryButton onClick={() => setSendStep(3)}>Revisar<ChevronRight size={18} /></PrimaryButton>
-          </div>
-        </Card>
-      ) : null}
-
-      {sendStep === 3 ? (
-        <div className="grid gap-4 xl:grid-cols-[1fr_1.15fr]">
-          <Card>
-            <SectionTitle title="Revisar" subtitle="No se envía automáticamente" />
-            <div className="mt-4 grid gap-3">
-              <Badge tone="blue">{campaignPreview.contacts.length} destinatarios</Badge>
-              <Badge tone={campaignPreview.excluded.length ? 'warn' : 'good'}>{campaignPreview.excluded.length} excluidos</Badge>
-              <Badge tone="neutral">Canal: {campaignForm.channel}</Badge>
-              {messageNeedsFeelGreatLink(campaignForm.message) && !isValidFeelGreatLink(settings.feelGreatLink || '') ? (
-                <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                  <p className="font-bold">Añade tu Feel Great Link en tu perfil para utilizar este mensaje.</p>
-                  <SecondaryButton className="mt-3" onClick={() => setProfileOpen(true)}><User size={16} />Ir a mi perfil</SecondaryButton>
-                </div>
-              ) : null}
-              <div className="rounded-3xl bg-slate-50 p-4"><p className="whitespace-pre-wrap text-sm">{campaignForm.message || 'Sin mensaje.'}</p></div>
-              {campaignImage ? <img src={campaignImage.dataUrl} alt="Imagen" className="max-h-56 rounded-3xl object-cover" /> : null}
-              {campaignPreview.excluded.map(({ contact, reason }) => <p key={contact.id} className="text-sm text-slate-500">{contact.firstName} {contact.lastName}: {reason}</p>)}
-              <PrimaryButton onClick={() => createCampaign()}>Comenzar envios</PrimaryButton>
-            </div>
-          </Card>
-          <Card>
-            <SectionTitle title="Cola individual" subtitle={activeCampaign ? activeCampaign.name : 'Continúa donde lo dejaste'} />
-            {currentQueueItem ? (
-              <div className="mt-4 grid gap-4">
-                <div className="flex flex-wrap gap-2">
-                  <Badge tone="blue">{queueIndex + 1} de {selectedQueue.length}</Badge>
-                  {queueStatuses.map((status) => <Badge key={status}>{status}: {selectedQueue.filter((item) => item.status === status).length}</Badge>)}
-                </div>
-                <div className="rounded-3xl bg-slate-50 p-4">
-                  <h3 className="text-xl font-black">{currentQueueItem.contactSnapshot.firstName} {currentQueueItem.contactSnapshot.lastName}</h3>
-                  <p className="text-slate-500">{currentQueueItem.contactSnapshot.phone} · {currentQueueItem.channel}</p>
-                  <p className="mt-3 whitespace-pre-wrap">{currentQueueItem.personalizedMessage}</p>
-                </div>
-                {activeCampaign?.image ? <img src={activeCampaign.image.dataUrl} alt="Imagen del envio" className="max-h-72 rounded-3xl object-cover" /> : null}
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <SecondaryButton onClick={() => copyMessage(currentQueueItem.personalizedMessage)}><Copy size={17} />Copiar</SecondaryButton>
-                  {activeCampaign?.image ? <SecondaryButton onClick={() => shareImage(activeCampaign.image!.dataUrl, activeCampaign.image!.name, activeCampaign.image!.type).then(setNotice)}><Share2 size={17} />Imagen</SecondaryButton> : null}
-                  <PrimaryButton onClick={() => openWhatsApp(currentQueueItem)}><MessageCircle size={17} />WhatsApp</PrimaryButton>
-                  <SecondaryButton onClick={() => openSms(currentQueueItem)}><Smartphone size={17} />SMS</SecondaryButton>
-                  <PrimaryButton onClick={() => setQueueStatus(currentQueueItem, 'Enviado', true)}><ChevronRight size={17} />Enviado y siguiente</PrimaryButton>
-                  <SecondaryButton onClick={() => setQueueStatus(currentQueueItem, 'Enviado')}><Check size={17} />Marcar enviado</SecondaryButton>
-                  <SecondaryButton onClick={() => setQueueStatus(currentQueueItem, 'Omitido')}><X size={17} />Omitido</SecondaryButton>
-                  <SecondaryButton onClick={() => setQueueStatus(currentQueueItem, 'Fallido')}><CircleAlert size={17} />No se pudo enviar</SecondaryButton>
-                  <SecondaryButton onClick={() => setQueueIndex((index) => Math.max(0, index - 1))}><ChevronLeft size={17} />Anterior</SecondaryButton>
-                  <SecondaryButton onClick={() => setQueueIndex((index) => Math.min(selectedQueue.length - 1, index + 1))}>Siguiente<ChevronRight size={17} /></SecondaryButton>
-                </div>
-              </div>
-            ) : <p className="mt-4 text-slate-500">No hay personas pendientes seleccionadas.</p>}
-          </Card>
-        </div>
-      ) : null}
-    </SectionShell>
-  );
-
-  const renderLaFitness = () => (
-    <SectionShell>
-      <Card>
-        <SectionTitle title="LA Fitness" subtitle="Prospectos que todavía no han comprado" />
-        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-6">
-          <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Prospectos totales</p><strong className="text-3xl">{laFitnessContacts.length}</strong></div>
-          <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Primer mensaje pendiente</p><strong className="text-3xl">{laFitnessContacts.filter((contact) => ['Nuevo', 'Mensaje pendiente'].includes(commercialStatus(contact))).length}</strong></div>
-          <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Esperando respuesta</p><strong className="text-3xl">{laFitnessContacts.filter((contact) => commercialStatus(contact) === 'Contactado').length}</strong></div>
-          <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Seguimiento semana</p><strong className="text-3xl">{laFitnessContacts.filter((contact) => commercialStatus(contact) === 'Seguimiento').length}</strong></div>
-          <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Convertidos</p><strong className="text-3xl">{laFitnessContacts.filter((contact) => commercialStatus(contact) === 'Cerrado').length}</strong></div>
-          <div className="rounded-3xl bg-slate-50 p-4"><p className="text-xs text-slate-500">Pausados</p><strong className="text-3xl">{laFitnessContacts.filter((contact) => contact.status === 'Pausado').length}</strong></div>
-        </div>
-        <div className="mt-5 grid gap-2 sm:grid-cols-3">
-          <PrimaryButton onClick={() => setConfigPanel('importar')}><Upload size={17} />Importar contactos</PrimaryButton>
-          <SecondaryButton onClick={() => { resetContactForm(); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><Plus size={17} />Añadir prospecto</SecondaryButton>
-          <SecondaryButton onClick={() => setSendStep(1)}><Send size={17} />Comenzar envíos</SecondaryButton>
-        </div>
-      </Card>
-
-      <Card>
-        <SectionTitle title="Pegar lista" subtitle="Ejemplo: María López, 4075551234" />
-        <div className="mt-4 grid gap-3">
-          <textarea className="input min-h-28" value={pastedProspects} onChange={(event) => setPastedProspects(event.target.value)} placeholder={'María López, 4075551234\nJohn Smith, 3215559876'} />
-          <div className="flex flex-wrap gap-2">
-            <PrimaryButton onClick={importPastedProspects}><Import size={17} />Importar lista pegada</PrimaryButton>
-            <SecondaryButton onClick={() => setConfigOpen(true)}><Settings size={17} />CSV y backups</SecondaryButton>
-          </div>
-        </div>
-      </Card>
-
-      {renderPeople()}
-      {renderSend()}
-    </SectionShell>
-  );
-
-  const tasksForCurrentGroup = () => {
-    const source = taskGroup === 'Hoy' ? todaysTasks : taskGroup === 'Vencidas' ? overdueTasks : taskGroup === 'Próximas' ? upcomingTasks : completedTasks;
-    return source.filter((task) => taskFilter === 'Todas' || task.kind === taskFilter);
-  };
-
-  const openTaskChannel = async (task: FollowUpTask, channel: 'WhatsApp' | 'SMS') => {
-    if (task.queueItemId) {
-      const queueItem = queue.find((item) => item.id === task.queueItemId);
-      if (!queueItem) return setNotice('No se encontró la cola de envío.');
-      if (channel === 'WhatsApp') await openWhatsApp(queueItem);
-      else await openSms(queueItem);
-      return;
-    }
-    const pseudoContact = {
-      firstName: task.contactName.split(' ')[0] || task.contactName,
-      lastName: task.contactName.split(' ').slice(1).join(' '),
-      phone: task.phone,
+    const preview = normalizePhone(followForm.phone, settings.defaultCountryCode);
+    if (!followForm.firstName.trim()) return setNotice(lang === 'en' ? 'Name is required.' : 'Escribe el nombre.');
+    if (!preview.valid) return setNotice(preview.message);
+    if (isDuplicatePhone(preview.normalized, members.map((member) => member.phone))) return setNotice(lang === 'en' ? 'That phone is already in follow-ups.' : 'Ese teléfono ya existe en seguimiento.');
+    const member: Member = {
+      firstName: followForm.firstName.trim(),
+      lastName: followForm.lastName.trim(),
+      phone: preview.normalized,
       countryCode: settings.defaultCountryCode,
       country: settings.defaultCountry,
-      category: task.kind === 'LA Fitness' ? 'Prospecto' : 'Miembro',
-      listIds: [],
-      tags: [],
-      createdAt: task.createdAt,
-      status: 'Activo',
-      preferredChannel: task.channel === 'SMS' ? 'SMS' : 'WhatsApp',
-      consent: true
-    } as Contact;
-    if (channel === 'WhatsApp') await openWhatsApp(pseudoContact, task.message);
-    else await openSms(pseudoContact, task.message);
-  };
+      purchaseDate: followForm.startDate,
+      protocolStartDate: followForm.startDate,
+      preferredChannel: followForm.channel,
+      language: followForm.language,
+      purchaseType: 'No sé',
+      interest: 'Solo protocolo',
+      programActive: true,
+      programStatus: 'Activo',
+      weeklyEventsActive: followForm.weeklyEventsActive,
+      followUpTime: followForm.followUpTime,
+      reminderMinutes: followForm.reminderMinutes,
+      createdAt: todayIso()
+    };
+    const id = await db.members.add(member);
+    const saved = { ...member, id };
+    await db.tasks.bulkAdd([...buildFirst30DayTasks(saved, settings.feelGreatLink || ''), ...buildWeeklyMeetingTasks(saved, weeklyEvents.length ? weeklyEvents : defaultWeeklyEvents)]);
+    setFollowForm({ firstName: '', lastName: '', phone: '', language: 'Español', startDate: todayKey(), channel: 'WhatsApp', followUpTime: '10:00', reminderMinutes: 30, weeklyEventsActive: false });
+    await loadAll(lang === 'en' ? 'Follow-up started.' : 'Seguimiento activado.');
+  }
 
-  const completeTask = async (task: FollowUpTask) => {
-    if (task.queueItemId) {
-      const queueItem = queue.find((item) => item.id === task.queueItemId);
-      if (queueItem) await setQueueStatus(queueItem, 'Enviado', true);
+  async function importFollowPaste() {
+    const parsed = parsePastedProspects(followImportText, members.map((member) => member.phone), settings.defaultCountryCode);
+    if (!parsed.contacts.length) return setNotice(lang === 'en' ? 'No valid people found.' : 'No se encontraron personas válidas.');
+    for (const contact of parsed.contacts) {
+      await db.members.add({
+        firstName: contact.firstName,
+        lastName: contact.lastName,
+        phone: contact.phone,
+        countryCode: contact.countryCode,
+        country: contact.country,
+        purchaseDate: todayKey(),
+        protocolStartDate: '',
+        preferredChannel: 'WhatsApp',
+        language: 'Español',
+        purchaseType: 'No sé',
+        interest: 'Solo protocolo',
+        programActive: false,
+        programStatus: 'Sin iniciar',
+        weeklyEventsActive: false,
+        followUpTime: '10:00',
+        reminderMinutes: 30,
+        createdAt: todayIso()
+      });
+    }
+    setFollowImportText('');
+    await loadAll(lang === 'en' ? 'People imported. Open each one to activate.' : 'Personas importadas. Abre cada una para activarla.');
+  }
+
+  function buildWeeklyMeetingTasks(member: Member, events: WeeklyEvent[]): FollowUpTask[] {
+    if (!member.id || !member.protocolStartDate || !member.weeklyEventsActive) return [];
+    const result: FollowUpTask[] = [];
+    const start = new Date(`${member.protocolStartDate}T00:00:00`);
+    for (let offset = 0; offset <= 30; offset += 1) {
+      const date = new Date(start);
+      date.setDate(start.getDate() + offset);
+      const dueDate = date.toISOString().slice(0, 10);
+      events.forEach((event) => {
+        if (!event.active || date.getDay() !== event.weekday) return;
+        const language = member.language || 'Español';
+        result.push({
+          memberId: member.id,
+          kind: 'Reunión',
+          program: 'Sistema semanal Golden Team',
+          title: event.name,
+          contactName: memberName(member),
+          phone: member.phone,
+          channel: member.preferredChannel,
+          language,
+          dueDate,
+          dueTime: event.reminderTime,
+          reminderMinutes: 30,
+          message: (language === 'English' ? event.messageEn || event.message : event.message).replaceAll('{{nombre_contacto}}', member.firstName).replaceAll('{{enlace_evento}}', event.link),
+          status: 'Pendiente',
+          createdAt: todayIso(),
+          sourceKey: `member:${member.id}:meeting:${event.name}:${dueDate}`,
+          meetingLink: event.link
+        });
+      });
+    }
+    return result;
+  }
+
+  async function regenerateFollowTasks(member: Member) {
+    if (!member.id) return;
+    const existingCompleted = await db.tasks.where('memberId').equals(member.id).and((task) => task.status === 'Completada').toArray();
+    await db.tasks.where('memberId').equals(member.id).and((task) => task.status !== 'Completada').delete();
+    const nextTasks = [...buildFirst30DayTasks(member, settings.feelGreatLink || ''), ...buildWeeklyMeetingTasks(member, weeklyEvents.length ? weeklyEvents : defaultWeeklyEvents)].filter((task) => !existingCompleted.some((done) => done.sourceKey === task.sourceKey));
+    if (nextTasks.length) await db.tasks.bulkAdd(nextTasks);
+    await loadAll(lang === 'en' ? 'Tasks regenerated.' : 'Tareas regeneradas.');
+  }
+
+  async function completeTask(task: FollowUpTask, channel?: 'WhatsApp' | 'SMS') {
+    if (!task.id || task.id < 0) {
+      const item = queue.find((candidate) => candidate.id === task.queueItemId);
+      if (item) await setQueueStatus(item, 'Enviado');
       return;
     }
-    await completeMemberTask(task);
-  };
+    await db.tasks.update(task.id, { status: 'Completada', completedAt: todayIso(), completedChannel: channel });
+    if (task.programDay === 30 && task.memberId) await db.members.update(task.memberId, { programStatus: 'Completado', programActive: false });
+    await loadAll(lang === 'en' ? 'Task completed.' : 'Tarea completada.');
+  }
 
-  const renderTasks = () => {
-    const visibleTasks = tasksForCurrentGroup();
-    return (
-      <SectionShell>
-        <Card>
-          <SectionTitle title="Tareas" subtitle="Action Hub de Golden Team Connect" />
-          <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
-            {taskGroups.map((group) => <button key={group} onClick={() => setTaskGroup(group)} className={`shrink-0 rounded-full px-4 py-2 text-sm font-bold ${taskGroup === group ? 'bg-brand text-white' : 'bg-slate-100 text-slate-600'}`}>{group}</button>)}
-          </div>
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            {taskFilters.map((filter) => <button key={filter} onClick={() => setTaskFilter(filter)} className={`shrink-0 rounded-full px-4 py-2 text-sm font-bold ${taskFilter === filter ? 'bg-brandDark text-white' : 'bg-slate-100 text-slate-600'}`}>{filter}</button>)}
-          </div>
-        </Card>
+  async function postponeTask(task: FollowUpTask, mode: '30' | 'later' | 'tomorrow' | 'custom') {
+    if (!task.id || task.id < 0) return;
+    const date = new Date();
+    let dueDate = todayKey();
+    let dueTime = task.dueTime;
+    if (mode === '30') {
+      date.setMinutes(date.getMinutes() + 30);
+      dueDate = date.toISOString().slice(0, 10);
+      dueTime = date.toTimeString().slice(0, 5);
+    }
+    if (mode === 'later') dueTime = '17:00';
+    if (mode === 'tomorrow') {
+      const tomorrow = new Date(`${todayKey()}T00:00:00`);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      dueDate = tomorrow.toISOString().slice(0, 10);
+      dueTime = '10:00';
+    }
+    if (mode === 'custom') {
+      const value = prompt(lang === 'en' ? 'New date and time (YYYY-MM-DD HH:mm)' : 'Nueva fecha y hora (YYYY-MM-DD HH:mm)', `${task.dueDate} ${task.dueTime}`);
+      if (!value) return;
+      const [customDate, customTime = '10:00'] = value.split(/\s+/);
+      dueDate = customDate;
+      dueTime = customTime;
+    }
+    await db.tasks.update(task.id, { dueDate, dueTime, status: 'Pospuesta' });
+    await loadAll(lang === 'en' ? 'Task postponed.' : 'Tarea pospuesta.');
+  }
 
-        <div className="grid gap-4 xl:grid-cols-[1fr_420px]">
-          <div className="grid gap-3">
-            {visibleTasks.length ? visibleTasks.map((task) => (
-              <article key={`${task.kind}-${task.id}`} className="rounded-[1.4rem] border border-slate-100 bg-white p-4 shadow-sm">
-                <button onClick={() => setSelectedTaskId(task.id || null)} className="w-full text-left">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className="truncate text-lg font-black">{task.contactName}</h3>
-                      <p className="text-sm text-slate-500">{task.title} · {task.program}</p>
-                      <p className="mt-1 text-xs text-slate-500">{shortDate(task.dueDate)} · {task.dueTime} · {task.channel} · Día {task.programDay ?? '-'}</p>
-                    </div>
-                    <Badge tone={task.status === 'Completada' ? 'good' : task.dueDate < todayKey() ? 'bad' : 'blue'}>{task.kind}</Badge>
-                  </div>
-                  <p className="mt-3 line-clamp-2 text-sm text-slate-600">{task.message}</p>
-                </button>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <SecondaryButton onClick={() => setSelectedTaskId(task.id || null)}>Abrir</SecondaryButton>
-                  <SecondaryButton onClick={() => openTaskChannel(task, 'WhatsApp')}><MessageCircle size={16} />WhatsApp</SecondaryButton>
-                  <SecondaryButton onClick={() => openTaskChannel(task, 'SMS')}><Smartphone size={16} />SMS</SecondaryButton>
-                  <SecondaryButton onClick={() => completeTask(task)}><Check size={16} />Completar</SecondaryButton>
-                </div>
-              </article>
-            )) : <Card><p className="text-sm text-slate-500">No hay tareas en esta vista.</p></Card>}
-          </div>
+  function listStats(list: InternalList) {
+    const people = contacts.filter((contact) => contact.listIds.includes(list.id!));
+    const es = people.filter((contact) => contactLanguage(contact) === 'Español').length;
+    const en = people.filter((contact) => contactLanguage(contact) === 'English').length;
+    const pending = queue.filter((item) => item.listNames.includes(list.name) && ['Pendiente', 'Abierto'].includes(item.status)).length;
+    const lastSent = queue.filter((item) => item.listNames.includes(list.name) && item.completedAt).sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)))[0];
+    return { total: people.length, es, en, pending, lastSent: lastSent?.completedAt };
+  }
 
-          <Card>
-            <SectionTitle title="Detalle" subtitle={selectedTask ? selectedTask.contactName : 'Selecciona una tarea'} />
-            {selectedTask ? (
-              <div className="mt-4 grid gap-3">
-                <Badge tone="blue">{selectedTask.kind} · {selectedTask.status}</Badge>
-                <p className="text-sm text-slate-600">{selectedTask.program} · {shortDate(selectedTask.dueDate)} · {selectedTask.dueTime}</p>
-                <div className="rounded-3xl bg-slate-50 p-4"><p className="whitespace-pre-wrap text-sm">{selectedTask.message}</p></div>
-                <div className="grid grid-cols-2 gap-2">
-                  <SecondaryButton onClick={() => copyMessage(selectedTask.message)}><Copy size={16} />Copiar</SecondaryButton>
-                  <SecondaryButton onClick={() => openTaskChannel(selectedTask, 'WhatsApp')}><MessageCircle size={16} />WhatsApp</SecondaryButton>
-                  <SecondaryButton onClick={() => openTaskChannel(selectedTask, 'SMS')}><Smartphone size={16} />SMS</SecondaryButton>
-                  <SecondaryButton onClick={() => callContact({ firstName: selectedTask.contactName, lastName: '', phone: selectedTask.phone, countryCode: settings.defaultCountryCode, country: settings.defaultCountry, category: 'Otro', listIds: [], tags: [], createdAt: selectedTask.createdAt, status: 'Activo', preferredChannel: 'WhatsApp', consent: true })}><Phone size={16} />Llamar</SecondaryButton>
-                  <PrimaryButton onClick={() => completeTask(selectedTask)}><Check size={16} />Completar</PrimaryButton>
-                  <SecondaryButton onClick={() => addTaskNote(selectedTask)}><Plus size={16} />Añadir nota</SecondaryButton>
-                </div>
-                {!selectedTask.queueItemId && selectedTask.id && selectedTask.id > 0 ? (
-                  <div className="grid gap-2">
-                    <p className="text-sm font-bold text-slate-700">Posponer</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <SecondaryButton onClick={() => postponeMemberTask(selectedTask, 'today')}>Más tarde hoy</SecondaryButton>
-                      <SecondaryButton onClick={() => postponeMemberTask(selectedTask, 'tomorrow')}>Mañana 10:00</SecondaryButton>
-                      <SecondaryButton onClick={() => postponeMemberTask(selectedTask, 'three')}>En 3 días</SecondaryButton>
-                      <SecondaryButton onClick={() => postponeMemberTask(selectedTask, 'custom')}>Elegir fecha</SecondaryButton>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ) : <p className="mt-4 text-sm text-slate-500">Las tareas vencidas y de hoy se revisan cada vez que abres la app.</p>}
-          </Card>
-        </div>
-      </SectionShell>
-    );
-  };
+  function queueProgress() {
+    const total = selectedQueue.length;
+    const done = selectedQueue.filter((item) => ['Enviado', 'Omitido', 'Fallido'].includes(item.status)).length;
+    const pending = selectedQueue.filter((item) => ['Pendiente', 'Abierto'].includes(item.status)).length;
+    return { total, done, pending };
+  }
 
-  const renderThemePicker = () => (
-    <div className="grid gap-2 sm:grid-cols-2">
-      {themeOptions.map((theme) => (
-        <button
-          key={theme.id}
-          onClick={() => saveProfilePatch({ visualTheme: theme.id }, `Tema ${theme.label} aplicado.`)}
-          className={`rounded-3xl border p-4 text-left transition ${settings.visualTheme === theme.id ? 'border-brand bg-brand text-white' : 'border-slate-100 bg-slate-50 text-ink'}`}
-        >
-          <span className="block font-black">{theme.label}</span>
-          <span className={`mt-1 block text-sm ${settings.visualTheme === theme.id ? 'text-white/75' : 'text-slate-500'}`}>{theme.detail}</span>
-        </button>
-      ))}
-    </div>
-  );
-
-  const renderProfile = () => (
-    <div className="fixed inset-0 z-40 bg-ink/45 p-4 pt-[calc(env(safe-area-inset-top)+1rem)] backdrop-blur-sm" onClick={() => setProfileOpen(false)}>
-      <div className="mx-auto max-h-[92vh] max-w-2xl overflow-auto rounded-[2rem] bg-white p-5 shadow-soft" onClick={(event) => event.stopPropagation()}>
-        <SectionTitle title="Perfil" subtitle="Tu acceso interno y enlace personal" action={<IconButton label="Cerrar" onClick={() => setProfileOpen(false)}><X /></IconButton>} />
-        <div className="mt-4 grid gap-4">
-          <Card className="bg-brand text-white">
-            <div className="flex items-center gap-3">
-              <img src={logoSrc} alt="Golden Team" className="h-16 w-16 rounded-3xl object-cover" />
-              <div>
-                <p className="text-sm text-white/70">Estado de sesión</p>
-                <h3 className="text-2xl font-black">{settings.sessionActive ? 'Sesión iniciada' : 'Sesión cerrada'}</h3>
-              </div>
-            </div>
-          </Card>
-
-          <form className="grid gap-3" onSubmit={saveSettings}>
-            <Field label="Nombre"><input className="input" value={settings.ownerName} onChange={(event) => setSettings((current) => ({ ...current, ownerName: event.target.value }))} /></Field>
-            <Field label="Feel Great Link"><input className="input" value={settings.feelGreatLink || ''} onChange={(event) => setSettings((current) => ({ ...current, feelGreatLink: normalizeFeelGreatLink(event.target.value) }))} placeholder="https://..." /></Field>
-            {settings.feelGreatLink && !isValidFeelGreatLink(settings.feelGreatLink) ? <Badge tone="warn">Revisa que hayas pegado tu enlace completo.</Badge> : null}
-            <PrimaryButton type="submit"><Check size={17} />Guardar perfil</PrimaryButton>
-          </form>
-
-          <Card>
-            <SectionTitle title="Mi Feel Great Link" subtitle={settings.feelGreatLink ? settings.feelGreatLink : 'Aun no has guardado tu enlace'} />
-            <div className="mt-4 grid gap-2 sm:grid-cols-4">
-              <SecondaryButton onClick={copyFeelGreatLink}><Copy size={16} />Copiar</SecondaryButton>
-              <SecondaryButton onClick={shareFeelGreatLink}><Share2 size={16} />Compartir</SecondaryButton>
-              <SecondaryButton onClick={openFeelGreatLink}><ExternalLink size={16} />Abrir</SecondaryButton>
-              <SecondaryButton onClick={() => setNotice('Edita el enlace arriba y toca Guardar perfil.')}><Edit3 size={16} />Editar</SecondaryButton>
-            </div>
-          </Card>
-
-          <Card>
-            <SectionTitle title="Tema visual" subtitle="Cuatro estilos prediseñados con buen contraste" />
-            <div className="mt-4">{renderThemePicker()}</div>
-          </Card>
-
-          <SecondaryButton onClick={closeSession}><X size={17} />Cerrar sesión</SecondaryButton>
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderConfig = () => (
-    <div className="fixed inset-0 z-40 bg-ink/35 p-4 pt-[calc(env(safe-area-inset-top)+1rem)] backdrop-blur-sm" onClick={() => setConfigOpen(false)}>
-      <div className="mx-auto grid max-h-[92vh] max-w-6xl overflow-hidden rounded-[2rem] bg-white shadow-soft lg:grid-cols-[280px_1fr]" onClick={(event) => event.stopPropagation()}>
-        <aside className="border-b border-slate-100 p-4 lg:border-b-0 lg:border-r">
-          <div className="flex items-center justify-between gap-3">
-            <div><h2 className="text-xl font-black">Configuracion</h2><p className="text-sm text-slate-500">Funciones avanzadas</p></div>
-            <IconButton label="Cerrar" onClick={() => setConfigOpen(false)}><X /></IconButton>
-          </div>
-          <div className="mt-4 flex gap-2 overflow-x-auto lg:grid">
-            {configPanels.map((panel) => <button key={panel.id} onClick={() => setConfigPanel(panel.id)} className={`flex min-w-max items-center gap-2 rounded-2xl px-4 py-3 text-left text-sm font-bold ${configPanel === panel.id ? 'bg-brand text-white' : 'bg-slate-50 text-slate-600'}`}>{panel.icon}{panel.label}</button>)}
-          </div>
-        </aside>
-        <div className="max-h-[92vh] overflow-auto p-5">
-          {configPanel === 'ubicaciones' ? (
-            <div className="grid gap-4">
-              <SectionTitle title="Ubicaciones" subtitle="Junction, Maitland y listas internas" />
-              <form className="flex gap-2" onSubmit={saveList}><input className="input" value={listName} onChange={(event) => setListName(event.target.value)} placeholder="Nombre de lista" /><PrimaryButton type="submit"><Check size={17} /></PrimaryButton></form>
-              <div className="grid gap-3 md:grid-cols-2">
-                {lists.map((list) => {
-                  const members = contacts.filter((contact) => contact.listIds.includes(list.id!));
-                  return <article key={list.id} className="rounded-3xl border border-slate-100 p-4"><h3 className="font-black">{list.name}</h3><p className="text-sm text-slate-500">{members.length} personas</p><div className="mt-3 flex flex-wrap gap-2"><SecondaryButton onClick={() => { setListName(list.name); setEditingListId(list.id!); }}><Edit3 size={16} />Editar</SecondaryButton><SecondaryButton onClick={() => duplicateList(list)}><Copy size={16} />Duplicar</SecondaryButton><SecondaryButton onClick={() => downloadFile(exportContactsCsv(members), `${list.name}.csv`, 'text/csv')}><Download size={16} />CSV</SecondaryButton><SecondaryButton onClick={() => deleteList(list.id)}><Trash2 size={16} />Eliminar</SecondaryButton></div></article>;
-                })}
-              </div>
-            </div>
-          ) : null}
-
-          {configPanel === 'mensajesMiembros' || configPanel === 'mensajesLa' ? (
-            <div className="grid gap-4">
-              <SectionTitle title={configPanel === 'mensajesMiembros' ? 'Mensajes de miembros' : 'Mensajes de LA Fitness'} subtitle="Mensajes guardados editables" />
-              <form className="grid gap-3" onSubmit={saveTemplate}>
-                <Field label="Nombre"><input className="input" value={templateForm.name} onChange={(event) => setTemplateForm((current) => ({ ...current, name: event.target.value }))} /></Field>
-                <Field label="Mensaje"><textarea className="input min-h-40" value={templateForm.body} onChange={(event) => setTemplateForm((current) => ({ ...current, body: event.target.value }))} /></Field>
-                <p className="text-sm text-slate-500">{templateForm.body.length} caracteres · {smsSegments(templateForm.body)} segmento(s) SMS</p>
-                <PrimaryButton type="submit"><Check size={17} />Guardar</PrimaryButton>
-              </form>
-              <input className="input" placeholder="Buscar mensaje guardado" value={templateSearch} onChange={(event) => setTemplateSearch(event.target.value)} />
-              <select className="input" value={previewContactId} onChange={(event) => setPreviewContactId(event.target.value ? Number(event.target.value) : '')}><option value="">Persona para probar</option>{contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.firstName} {contact.lastName}</option>)}</select>
-              {templates.filter((template) => template.name.toLowerCase().includes(templateSearch.toLowerCase())).map((template) => {
-                const previewContact = contacts.find((contact) => contact.id === previewContactId) || contacts[0];
-                return <article key={template.id} className="rounded-3xl border border-slate-100 p-4"><h3 className="font-black">{template.name}</h3><p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{previewContact ? personalizeMessage(template.body, previewContact, listNames(previewContact.listIds).split(', ')[0] || '', messageContext()) : template.body}</p><div className="mt-3 flex flex-wrap gap-2"><SecondaryButton onClick={() => { setTemplateForm(template); setEditingTemplateId(template.id!); }}><Edit3 size={16} />Editar</SecondaryButton><SecondaryButton onClick={() => db.templates.add({ name: `${template.name} copia`, body: template.body, createdAt: todayIso() }).then(() => loadAll('Mensaje duplicado.'))}><Copy size={16} />Duplicar</SecondaryButton><SecondaryButton onClick={() => deleteTemplate(template.id)}><Trash2 size={16} />Eliminar</SecondaryButton></div></article>;
-              })}
-            </div>
-          ) : null}
-
-          {configPanel === 'semanal' ? (
-            <div className="grid gap-4">
-              <SectionTitle title="Sistema semanal Golden Team" subtitle="Solo para interesados en negocio o distribuidores" />
-              {weeklyEvents.map((eventItem) => (
-                <article key={eventItem.id} className="rounded-3xl border border-slate-100 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h3 className="font-black">{eventItem.name}</h3>
-                      <p className="text-sm text-slate-500">Día {eventItem.weekday} · Evento {eventItem.eventTime} · Recordatorio {eventItem.reminderTime}</p>
-                    </div>
-                    <label className="flex items-center gap-2 text-sm font-bold"><input type="checkbox" checked={eventItem.active} onChange={(event) => saveWeeklyEvent(eventItem, { active: event.target.checked })} />Activo</label>
-                  </div>
-                  <div className="mt-3 grid gap-3">
-                    <Field label="Enlace"><input className="input" value={eventItem.link} onChange={(event) => saveWeeklyEvent(eventItem, { link: event.target.value })} /></Field>
-                    <Field label="Mensaje"><textarea className="input min-h-28" value={eventItem.message} onChange={(event) => saveWeeklyEvent(eventItem, { message: event.target.value })} /></Field>
-                  </div>
-                </article>
-              ))}
-            </div>
-          ) : null}
-
-          {configPanel === 'importar' ? (
-            <div className="grid gap-4">
-              <SectionTitle title="Importar y exportar" subtitle="CSV general, prospectos LA Fitness y exportación" />
-              <div className="grid gap-3">
-                <div className="grid gap-2 md:grid-cols-3">
-                  <select className="input" value={listFilter} onChange={(event) => setListFilter(event.target.value)}><option value="">Todas las listas</option>{lists.map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}</select>
-                  <select className="input" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="">Todas las categorias</option>{categories.map((item) => <option key={item}>{item}</option>)}</select>
-                  <select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">Todos los estados</option>{statuses.map((item) => <option key={item}>{item}</option>)}</select>
-                  <select className="input" value={channelFilter} onChange={(event) => setChannelFilter(event.target.value)}><option value="">Todos los canales</option>{channels.map((item) => <option key={item}>{item}</option>)}</select>
-                  <input className="input" value={countryFilter} onChange={(event) => setCountryFilter(event.target.value)} placeholder="Pais" />
-                  <SecondaryButton onClick={() => setSelectedContacts(filteredContacts.map((contact) => contact.id!).filter(Boolean))}>Seleccionar visibles</SecondaryButton>
-                </div>
-                <input className="input" value={csvDefaultCode} onChange={(event) => setCsvDefaultCode(event.target.value)} placeholder="Codigo de pais por defecto" />
-                <textarea className="input min-h-40" value={csvText} onChange={(event) => setCsvText(event.target.value)} placeholder="nombre,apellido,telefono,codigo_pais,pais,categoria,lista,notas,consentimiento,canal_preferido" />
-                <div className="flex flex-wrap gap-2"><PrimaryButton onClick={importCsv}><Upload size={17} />Importar</PrimaryButton><SecondaryButton onClick={() => downloadFile(exportContactsCsv(filteredContacts), 'personas.csv', 'text/csv')}><Download size={17} />Exportar visibles</SecondaryButton>{lists[0] ? <SecondaryButton onClick={() => addSelectedToList(lists[0].id!)}>Anadir seleccionados a {lists[0].name}</SecondaryButton> : null}</div>
-              </div>
-            </div>
-          ) : null}
-
-          {configPanel === 'copias' ? (
-            <div className="grid gap-4">
-              <SectionTitle title="Copias de seguridad" subtitle="Exportar o restaurar datos locales" />
-              <PrimaryButton onClick={exportBackup}><Download size={17} />Exportar JSON</PrimaryButton>
-              <select className="input" value={restoreMode} onChange={(event) => setRestoreMode(event.target.value as 'replace' | 'merge')}><option value="merge">Combinar sin duplicar numeros</option><option value="replace">Reemplazar todos los datos</option></select>
-              <textarea className="input min-h-48" value={backupText} onChange={(event) => setBackupText(event.target.value)} placeholder="Pega aqui el JSON del backup" />
-              <PrimaryButton onClick={restoreBackup}><Upload size={17} />Validar y restaurar</PrimaryButton>
-              <SectionTitle title="Historial de envios" subtitle="Opciones avanzadas" />
-              {campaigns.map((campaign) => <article key={campaign.id} className="rounded-3xl border border-slate-100 p-4"><h3 className="font-black">{campaign.name}</h3><p className="text-sm text-slate-500">{queue.filter((item) => item.campaignId === campaign.id).length} personas</p><div className="mt-3 flex flex-wrap gap-2"><SecondaryButton onClick={() => { setActiveCampaignId(campaign.id!); setActive('laFitness'); setSendStep(3); setConfigOpen(false); }}>Abrir</SecondaryButton><SecondaryButton onClick={() => duplicateCampaign(campaign)}><Copy size={16} />Duplicar</SecondaryButton><SecondaryButton onClick={() => retryFailed(campaign)}><RefreshCw size={16} />Fallidos</SecondaryButton><SecondaryButton onClick={() => exportCampaignSummary(campaign)}><Download size={16} />Resumen</SecondaryButton><SecondaryButton onClick={() => confirm('Eliminar este envio y sus personas pendientes?') && db.transaction('rw', db.campaigns, db.queue, async () => { await db.campaigns.delete(campaign.id!); await db.queue.where('campaignId').equals(campaign.id!).delete(); }).then(() => loadAll('Envio eliminado.'))}><Trash2 size={16} />Eliminar</SecondaryButton></div></article>)}
-            </div>
-          ) : null}
-
-          {configPanel === 'perfil' ? (
-            <form className="grid gap-3" onSubmit={saveSettings}>
-              <SectionTitle title="Perfil" subtitle="Datos del propietario y comportamiento" />
-              <Field label="Nombre"><input className="input" value={settings.ownerName} onChange={(event) => setSettings((current) => ({ ...current, ownerName: event.target.value }))} /></Field>
-              <Field label="Numero personal"><input className="input" value={settings.personalNumber} onChange={(event) => setSettings((current) => ({ ...current, personalNumber: event.target.value }))} /></Field>
-              <div className="grid grid-cols-2 gap-3"><Field label="Codigo"><input className="input" value={settings.defaultCountryCode} onChange={(event) => setSettings((current) => ({ ...current, defaultCountryCode: event.target.value }))} /></Field><Field label="Pais"><input className="input" value={settings.defaultCountry} onChange={(event) => setSettings((current) => ({ ...current, defaultCountry: event.target.value }))} /></Field></div>
-              <Field label="Canal preferido"><select className="input" value={settings.preferredChannel} onChange={(event) => setSettings((current) => ({ ...current, preferredChannel: event.target.value as Channel }))}>{channels.map((item) => <option key={item}>{item}</option>)}</select></Field>
-              <PrimaryButton type="submit"><Check size={17} />Guardar</PrimaryButton>
-              <div className="rounded-3xl border border-red-200 bg-red-50 p-4"><p className="font-black text-red-800">Borrar todos los datos</p><input className="input mt-2" value={doubleDelete} onChange={(event) => setDoubleDelete(event.target.value)} placeholder="Escribe BORRAR" /><SecondaryButton className="mt-2" onClick={deleteAllData}><Trash2 size={17} />Borrar datos locales</SecondaryButton></div>
-            </form>
-          ) : null}
-
-          {configPanel === 'informacion' ? (
-            <div className="grid gap-4 text-sm text-slate-600">
-              <SectionTitle title="Información" subtitle="Limitaciones reales y estado local" />
-              <p>Los datos se guardan localmente en IndexedDB. La app funciona sin backend y no usa servicios pagados.</p>
-              <p>WhatsApp y SMS se abren manualmente por persona. No se crean grupos ni envios automaticos.</p>
-              <p>Las notificaciones de sistema en iPhone o PWA estática no siempre son confiables en segundo plano; la app mantiene recordatorios internos y los muestra al abrir.</p>
-              <p>La arquitectura mantiene el flujo de preparacion separado de la apertura manual, para poder sustituir esta salida por una integracion oficial futura sin reconstruir toda la experiencia.</p>
-              <p>Contactos: {contacts.length}. Miembros: {members.length}. Tareas: {tasks.length}. Envios: {campaigns.length}. Personas pendientes: {queue.length}.</p>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </div>
-  );
+  const navItems: Array<{ id: MainSection; icon: ReactNode; label: string }> = [
+    { id: 'inicio', icon: <Home size={20} />, label: c.nav.inicio },
+    { id: 'difusion', icon: <Send size={20} />, label: c.nav.difusion },
+    { id: 'seguimiento', icon: <Users size={20} />, label: c.nav.seguimiento },
+    { id: 'tareas', icon: <Bell size={20} />, label: c.nav.tareas }
+  ];
 
   const renderEntry = () => (
     <div className="theme-golden min-h-screen min-h-[100svh] min-h-[100dvh] bg-[#000000] px-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] pt-[calc(env(safe-area-inset-top)+1.25rem)] text-white">
       <div className="mx-auto flex min-h-[calc(100vh-2.5rem)] min-h-[calc(100svh-2.5rem)] min-h-[calc(100dvh-2.5rem)] max-w-md flex-col justify-center bg-[#000000]">
         <div className="mb-6 text-center">
-          <img
-            src={entryLogoSrc}
-            alt="Golden Team"
-            className="mx-auto mb-5 h-auto w-[82vw] max-w-[20rem] object-contain sm:max-w-[22rem]"
-          />
+          <img src={entryLogoSrc} alt="Golden Team" className="mx-auto mb-5 h-auto w-[82vw] max-w-[20rem] object-contain sm:max-w-[22rem]" />
           <p className="text-[0.66rem] font-bold uppercase tracking-[0.24em] text-gold/90">Acceso interno del equipo</p>
           <h1 className="mt-2.5 text-[2rem] font-black leading-tight tracking-normal sm:text-[2.15rem]">Golden Team Connect</h1>
           <p className="mt-1.5 text-[0.95rem] leading-relaxed text-white/72">Organiza. Da seguimiento. Mantente conectado.</p>
@@ -1826,20 +884,11 @@ function App() {
         <form className="grid gap-3.5" onSubmit={submitEntry}>
           <Field label="Nombre"><input className="input border-white/12 bg-white/[0.97] text-black shadow-none" value={entryName} onChange={(event) => setEntryName(event.target.value)} placeholder="Ayhann" /></Field>
           <Field label="Feel Great Link"><input className="input border-white/12 bg-white/[0.97] text-black shadow-none" value={entryLink} onChange={(event) => setEntryLink(event.target.value)} placeholder="https://..." /></Field>
-          <Field label="Código de acceso">
-            <div className="flex gap-2">
-              <input
-                className="input border-white/12 bg-white/[0.97] text-black shadow-none"
-                type={showAccessCode ? 'text' : 'password'}
-                value={entryAccessCode}
-                onChange={(event) => setEntryAccessCode(normalizeAccessCode(event.target.value))}
-                placeholder="Código de acceso"
-                autoCapitalize="characters"
-                spellCheck={false}
-              />
-              <IconButton label={showAccessCode ? 'Ocultar código de acceso' : 'Mostrar código de acceso'} onClick={() => setShowAccessCode((current) => !current)}>{showAccessCode ? <EyeOff /> : <Eye />}</IconButton>
+          <Field label="Código de acceso" helper="Ingresa el código proporcionado por Golden Team.">
+            <div className="flex min-w-0 gap-2">
+              <input className="input min-w-0 border-white/12 bg-white/[0.97] text-black shadow-none" type={showAccessCode ? 'text' : 'password'} value={entryAccessCode} onChange={(event) => setEntryAccessCode(normalizeAccessCode(event.target.value))} placeholder="Código de acceso" autoCapitalize="characters" spellCheck={false} />
+              <IconButton label={showAccessCode ? 'Ocultar código de acceso' : 'Mostrar código de acceso'} onClick={() => setShowAccessCode((current) => !current)} className="shrink-0">{showAccessCode ? <EyeOff /> : <Eye />}</IconButton>
             </div>
-            <span className="text-xs font-medium text-white/55">Ingresa el código proporcionado por Golden Team.</span>
           </Field>
           {entryError ? <p className="rounded-2xl border border-red-400/40 bg-red-500/15 p-3 text-sm font-bold text-red-100">{entryError}</p> : null}
           <PrimaryButton type="submit" className="mt-1 bg-gold text-black shadow-none hover:bg-goldDark"><Check size={18} />Entrar</PrimaryButton>
@@ -1849,40 +898,407 @@ function App() {
     </div>
   );
 
-  return (
-    !ready ? (
-      <div className="theme-golden grid min-h-screen place-items-center bg-black text-white">Cargando Golden Team Connect...</div>
-    ) : !settings.sessionActive ? (
-      renderEntry()
-    ) : (
-    <div className={`theme-${settings.visualTheme || 'golden'} min-h-screen bg-soft text-ink lg:flex`}>
-      {nav}
-      <main className="w-full px-4 pb-[calc(env(safe-area-inset-bottom)+6rem)] pt-[calc(env(safe-area-inset-top)+1rem)] lg:px-8 lg:pb-8">
-        <header className="mx-auto mb-5 flex max-w-6xl items-center justify-between gap-3">
-          <div className="min-w-0 lg:hidden">
-            <p className="text-xs font-bold text-brand">Golden Team Connect</p>
-            <p className="truncate text-sm text-slate-500">Organiza. Da seguimiento. Mantente conectado.</p>
+  const renderHome = () => (
+    <div className="grid gap-4">
+      <button onClick={() => setAccountOpen(true)} className="min-w-0 rounded-[2rem] bg-black p-5 text-left text-white shadow-soft">
+        <div className="flex min-w-0 items-center gap-4">
+          <img src={logoSrc} alt="Golden Team" className="h-14 w-14 shrink-0 rounded-2xl object-cover" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-gold">{c.homeTitle}, {firstName(settings)}</p>
+            <h1 className="mt-1 truncate text-2xl font-black tracking-normal">{displayName(settings)}</h1>
+            <p className="mt-1 truncate text-sm text-white/65">{readableUrl(settings.feelGreatLink)}</p>
           </div>
-          <div className="hidden lg:block">
-            <p className="text-sm font-bold text-brand">Golden Team Connect</p>
-            <h1 className="text-3xl font-black tracking-normal">{mainSections.find((section) => section.id === active)?.label}</h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <SecondaryButton onClick={() => setActive('laFitness')} className="hidden sm:inline-flex"><MapPin size={17} />LA Fitness</SecondaryButton>
-            <IconButton label="Perfil" onClick={() => setProfileOpen(true)}><User /></IconButton>
-            <IconButton label="Configuracion" onClick={() => setConfigOpen(true)}><Settings /></IconButton>
-          </div>
-        </header>
-
-        {active === 'inicio' ? renderHome() : null}
-        {active === 'miembros' ? renderMembers() : null}
-        {active === 'laFitness' ? renderLaFitness() : null}
-        {active === 'tareas' ? renderTasks() : null}
-      </main>
-      {configOpen ? renderConfig() : null}
-      {profileOpen ? renderProfile() : null}
+          {settings.profilePhoto ? <img src={settings.profilePhoto} alt="" className="h-14 w-14 shrink-0 rounded-full object-cover" /> : <div className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-white/10 text-xl font-black">{initials(displayName(settings))}</div>}
+        </div>
+        <div className="mt-5 flex flex-wrap gap-2" onClick={(event) => event.stopPropagation()}>
+          <SecondaryButton onClick={copyFeelGreatLink} className="border-white/15 bg-white/10 text-white hover:border-gold hover:text-gold"><Copy size={16} />{c.copy}</SecondaryButton>
+          <SecondaryButton onClick={shareFeelGreatLink} className="border-white/15 bg-white/10 text-white hover:border-gold hover:text-gold"><Share2 size={16} />{c.share}</SecondaryButton>
+          <SecondaryButton onClick={openFeelGreatLink} className="border-white/15 bg-white/10 text-white hover:border-gold hover:text-gold"><ExternalLink size={16} />{c.myLink}</SecondaryButton>
+        </div>
+      </button>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Card><p className="text-xs font-bold text-slate-500">{c.broadcast}</p><strong className="text-3xl text-ink">{lists.length}</strong><p className="text-sm text-slate-500">listas</p></Card>
+        <Card><p className="text-xs font-bold text-slate-500">{c.followUps}</p><strong className="text-3xl text-ink">{activeFollowPeople.length}</strong><p className="text-sm text-slate-500">activas</p></Card>
+        <Card><p className="text-xs font-bold text-slate-500">{c.tasks}</p><strong className="text-3xl text-ink">{taskBadge}</strong><p className="text-sm text-slate-500">{lang === 'en' ? 'today + overdue' : 'hoy + vencidas'}</p></Card>
+      </div>
+      <Card>
+        <h2 className="text-lg font-black text-ink">{lang === 'en' ? 'Next actions' : 'Próximas acciones'}</h2>
+        <div className="mt-3 grid gap-2">
+          {[...overdueTasks, ...todayTasks].slice(0, 4).map((task) => (
+            <button key={`${task.id}-${task.sourceKey}`} onClick={() => { setSelectedTaskId(task.id || null); setActive('tareas'); }} className="flex min-w-0 items-center justify-between gap-3 rounded-2xl bg-slate-50 p-3 text-left">
+              <span className="min-w-0"><strong className="block truncate text-sm text-ink">{task.contactName}</strong><span className="block truncate text-xs text-slate-500">{task.title}</span></span>
+              <Badge tone={task.dueDate < todayKey() ? 'bad' : 'warn'}>{shortDate(task.dueDate, lang)}</Badge>
+            </button>
+          ))}
+          {!todayTasks.length && !overdueTasks.length ? <p className="text-sm text-slate-500">{lang === 'en' ? 'No urgent actions right now.' : 'No hay acciones urgentes ahora.'}</p> : null}
+        </div>
+      </Card>
     </div>
-    )
+  );
+
+  const renderAccount = () => (
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-soft px-4 pb-6 pt-[calc(env(safe-area-inset-top)+1rem)]">
+      <div className="mx-auto grid max-w-2xl gap-4">
+        <div className="flex items-center justify-between">
+          <button onClick={() => setAccountOpen(false)} className="inline-flex items-center gap-2 text-sm font-black text-brand"><ChevronLeft size={18} />{c.account}</button>
+          <IconButton label="Cerrar" onClick={() => setAccountOpen(false)}><X /></IconButton>
+        </div>
+        <Header title={displayName(settings)} subtitle={readableUrl(settings.feelGreatLink)} action={settings.profilePhoto ? <img src={settings.profilePhoto} className="h-16 w-16 rounded-full object-cover" alt="" /> : <div className="grid h-16 w-16 rounded-full bg-white/10 text-xl font-black">{initials(displayName(settings))}</div>} />
+        <Card>
+          <h2 className="text-lg font-black text-ink">{c.profileInfo}</h2>
+          <form className="mt-4 grid gap-3" onSubmit={saveProfile}>
+            <Field label={c.name}><input className="input" value={profileName} onChange={(event) => setProfileName(event.target.value)} /></Field>
+            <input ref={photoInputRef} className="hidden" type="file" accept="image/*" onChange={handleProfilePhoto} />
+            <div className="flex flex-wrap gap-2">
+              <SecondaryButton onClick={() => photoInputRef.current?.click()}><Camera size={16} />{settings.profilePhoto ? (lang === 'en' ? 'Change photo' : 'Cambiar foto') : (lang === 'en' ? 'Add photo' : 'Añadir foto')}</SecondaryButton>
+              {settings.profilePhoto ? <SecondaryButton onClick={() => saveSettingsPatch({ profilePhoto: '' }, lang === 'en' ? 'Photo removed.' : 'Foto eliminada.')}><Trash2 size={16} />{lang === 'en' ? 'Remove photo' : 'Eliminar foto'}</SecondaryButton> : null}
+              <PrimaryButton type="submit"><Check size={16} />{c.save}</PrimaryButton>
+            </div>
+          </form>
+        </Card>
+        <Card>
+          <h2 className="text-lg font-black text-ink">{c.feelLink}</h2>
+          <form className="mt-4 grid gap-3" onSubmit={saveProfile}>
+            <Field label="Feel Great Link"><input className="input" value={profileLink} onChange={(event) => setProfileLink(event.target.value)} /></Field>
+            <div className="flex flex-wrap gap-2">
+              <PrimaryButton type="submit"><Check size={16} />{c.save}</PrimaryButton>
+              <SecondaryButton onClick={copyFeelGreatLink}><Copy size={16} />{c.copy}</SecondaryButton>
+              <SecondaryButton onClick={shareFeelGreatLink}><Share2 size={16} />{c.share}</SecondaryButton>
+              <SecondaryButton onClick={openFeelGreatLink}><ExternalLink size={16} />{c.open}</SecondaryButton>
+            </div>
+          </form>
+        </Card>
+        <Card>
+          <h2 className="text-lg font-black text-ink">{c.language}</h2>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button onClick={() => saveSettingsPatch({ preferredLanguage: 'es' }, 'Idioma actualizado.')} className={`rounded-2xl p-4 text-sm font-black ${lang === 'es' ? 'bg-black text-white' : 'bg-slate-100 text-slate-700'}`}>Español</button>
+            <button onClick={() => saveSettingsPatch({ preferredLanguage: 'en' }, 'Language updated.')} className={`rounded-2xl p-4 text-sm font-black ${lang === 'en' ? 'bg-black text-white' : 'bg-slate-100 text-slate-700'}`}>English</button>
+          </div>
+        </Card>
+        <Card>
+          <h2 className="text-lg font-black text-ink">{lang === 'en' ? 'Technical backup' : 'Backup técnico'}</h2>
+          <p className="mt-1 text-sm text-slate-500">{lang === 'en' ? 'Local export for your own records.' : 'Exportación local para tus propios registros.'}</p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <SecondaryButton onClick={() => downloadFile(JSON.stringify({ app: 'difusion-local-privada', version: 1, exportedAt: todayIso(), contacts, lists, campaigns, queue, members, tasks, weeklyEvents, mediaAssets, settings }, null, 2), `backup-golden-team-${todayKey()}.json`, 'application/json')}><Download size={16} />Exportar backup</SecondaryButton>
+            <SecondaryButton onClick={closeSession}><LogOut size={16} />{c.logout}</SecondaryButton>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+
+  const renderBroadcast = () => {
+    if (selectedList) return renderBroadcastList();
+    return (
+      <div className="grid gap-4">
+        <Header title={c.broadcast} subtitle={c.broadcastSub} />
+        <div className="grid gap-2 sm:grid-cols-3">
+          <PrimaryButton onClick={() => document.getElementById('new-list-name')?.focus()}><Plus size={17} />{c.newList}</PrimaryButton>
+          <SecondaryButton onClick={() => mediaInputRef.current?.click()}><Library size={17} />{c.library}</SecondaryButton>
+          <SecondaryButton onClick={() => { const pending = campaigns.find((campaign) => queue.some((item) => item.campaignId === campaign.id && ['Pendiente', 'Abierto'].includes(item.status))); if (pending?.id) { setActiveCampaignId(pending.id); setSelectedListId(pending.listIds[0] || null); } }}><Play size={17} />{c.continueQueue}</SecondaryButton>
+        </div>
+        <Card>
+          <form className="grid gap-3 sm:grid-cols-[1fr_auto]" onSubmit={createList}>
+            <Field label={lang === 'en' ? 'List name' : 'Nombre de la lista'}><input id="new-list-name" className="input" value={listName} onChange={(event) => setListName(event.target.value)} placeholder="LA Fitness" /></Field>
+            <PrimaryButton type="submit" className="self-end"><Plus size={17} />{c.newList}</PrimaryButton>
+          </form>
+        </Card>
+        <div className="grid gap-3">
+          {lists.map((list) => {
+            const stats = listStats(list);
+            return (
+              <button key={list.id} onClick={() => { setSelectedListId(list.id!); setMessageEs(list.lastMessageEs || ''); setMessageEn(list.lastMessageEn || ''); }} className="min-w-0 rounded-[1.4rem] border border-slate-100 bg-white p-4 text-left shadow-sm">
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className="truncate text-lg font-black text-ink">{list.name}</h2>
+                    <p className="mt-1 text-sm text-slate-500">{stats.total} contactos · {stats.es} Español · {stats.en} English</p>
+                  </div>
+                  {stats.pending ? <Badge tone="warn">{stats.pending} pendientes</Badge> : <Badge>{stats.lastSent ? shortDate(stats.lastSent, lang) : 'Sin envío'}</Badge>}
+                </div>
+              </button>
+            );
+          })}
+          {!lists.length ? <Card><p className="text-sm text-slate-500">{lang === 'en' ? 'No lists yet. Create your first list when you are ready.' : 'Todavía no hay listas. Crea tu primera lista cuando estés listo.'}</p></Card> : null}
+        </div>
+        {renderMediaLibrary()}
+      </div>
+    );
+  };
+
+  const renderBroadcastList = () => {
+    const stats = listStats(selectedList!);
+    const previewContacts = previewBroadcastContacts();
+    const previewContact = previewContacts[0];
+    const previewMessage = previewContact ? personalizeMessage(contactLanguage(previewContact) === 'English' ? messageEn : messageEs, previewContact, selectedList!.name, messageContext()) : '';
+    return (
+      <div className="grid gap-4">
+        <button onClick={() => setSelectedListId(null)} className="inline-flex w-fit items-center gap-2 text-sm font-black text-brand"><ChevronLeft size={18} />{c.broadcast}</button>
+        <Header title={selectedList!.name} subtitle={`${stats.total} contactos · ${stats.es} Español · ${stats.en} English · ${stats.pending} pendientes`} action={<IconButton label={c.delete} onClick={() => deleteList(selectedList!.id)}><Trash2 /></IconButton>} />
+        {currentQueueItem && activeCampaign?.listIds.includes(selectedList!.id!) ? renderQueue() : null}
+        <div className="grid gap-2 sm:grid-cols-5">
+          <PrimaryButton onClick={() => document.getElementById('broadcast-contact-name')?.focus()}><Plus size={17} />Añadir contacto</PrimaryButton>
+          <SecondaryButton onClick={() => importFromDeviceContacts('broadcast')}><Phone size={17} />Teléfono</SecondaryButton>
+          <SecondaryButton onClick={() => mediaInputRef.current?.click()}><Library size={17} />{c.library}</SecondaryButton>
+          <SecondaryButton onClick={() => createBroadcastQueue()}><Send size={17} />Comenzar envío</SecondaryButton>
+          <SecondaryButton onClick={() => downloadFile(exportContactsCsv(listContacts), `${selectedList!.name}.csv`, 'text/csv')}><Download size={17} />CSV</SecondaryButton>
+        </div>
+        <Card>
+          <form className="grid gap-3" onSubmit={saveBroadcastContact}>
+            <h2 className="text-lg font-black text-ink">Añadir contacto</h2>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label={c.name}><input id="broadcast-contact-name" className="input" value={broadcastContact.firstName} onChange={(event) => setBroadcastContact((current) => ({ ...current, firstName: event.target.value }))} /></Field>
+              <Field label="Apellido"><input className="input" value={broadcastContact.lastName} onChange={(event) => setBroadcastContact((current) => ({ ...current, lastName: event.target.value }))} /></Field>
+              <Field label={c.phone}><input className="input" value={broadcastContact.phone} onChange={(event) => setBroadcastContact((current) => ({ ...current, phone: event.target.value }))} /></Field>
+              <Field label={c.language}><select className="input" value={broadcastContact.language} onChange={(event) => setBroadcastContact((current) => ({ ...current, language: event.target.value as ContactLanguage }))}>{contactLanguages.map((item) => <option key={item}>{item}</option>)}</select></Field>
+            </div>
+            <PrimaryButton type="submit"><Plus size={17} />Añadir</PrimaryButton>
+          </form>
+        </Card>
+        <Card>
+          <h2 className="text-lg font-black text-ink">{c.importContacts}</h2>
+          <div className="mt-3 grid gap-3">
+            <Field label="CSV"><textarea className="input min-h-28" value={csvText} onChange={(event) => setCsvText(event.target.value)} placeholder="nombre,telefono,idioma" /></Field>
+            <div className="flex flex-wrap gap-2"><SecondaryButton onClick={importBroadcastCsv}><Upload size={16} />Importar CSV</SecondaryButton></div>
+            <Field label={lang === 'en' ? 'Paste list' : 'Pegar lista'}><textarea className="input min-h-24" value={pasteText} onChange={(event) => setPasteText(event.target.value)} placeholder="Maria 4075551234" /></Field>
+            <SecondaryButton onClick={importBroadcastPaste}><Upload size={16} />{lang === 'en' ? 'Import pasted list' : 'Importar lista pegada'}</SecondaryButton>
+          </div>
+        </Card>
+        {renderMediaLibrary()}
+        <Card>
+          <form className="grid gap-3" onSubmit={createBroadcastQueue}>
+            <h2 className="text-lg font-black text-ink">Preparar difusión</h2>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="Audiencia"><select className="input" value={audience} onChange={(event) => setAudience(event.target.value as Audience)}><option>Español</option><option>English</option><option>Manual</option></select></Field>
+              <Field label={c.channel}><select className="input" value={broadcastChannel} onChange={(event) => setBroadcastChannel(event.target.value as Channel)}><option>WhatsApp</option><option>SMS</option><option>Ambos</option></select></Field>
+              <Field label="Media"><select className="input" value={selectedMediaId} onChange={(event) => setSelectedMediaId(event.target.value ? Number(event.target.value) : '')}><option value="">Sin media</option>{mediaAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select></Field>
+            </div>
+            <Field label="Mensaje Español"><textarea className="input min-h-28" value={messageEs} onChange={(event) => setMessageEs(event.target.value)} placeholder="Hola {{nombre_contacto}}, soy {{nombre_usuario}}..." /></Field>
+            <Field label="Message English"><textarea className="input min-h-28" value={messageEn} onChange={(event) => setMessageEn(event.target.value)} placeholder="Hi {{nombre_contacto}}, this is {{nombre_usuario}}..." /></Field>
+            <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-600">
+              <strong>{previewContacts.length}</strong> contactos seleccionados. Variables: <code>{'{{nombre_contacto}}'}</code>, <code>{'{{nombre_usuario}}'}</code>, <code>{'{{feelgreat_link}}'}</code>
+              {previewContact ? <p className="mt-2 whitespace-pre-wrap rounded-xl bg-white p-3">{previewMessage || 'Vista previa sin texto.'}</p> : null}
+            </div>
+            <PrimaryButton type="submit"><Send size={17} />Comenzar envío</PrimaryButton>
+          </form>
+        </Card>
+        <Card>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-black text-ink">Contactos</h2>
+            <select className="input w-auto" value={listLanguageFilter} onChange={(event) => setListLanguageFilter(event.target.value as 'Todos' | ContactLanguage)}><option>Todos</option><option>Español</option><option>English</option></select>
+          </div>
+          <div className="grid gap-2">
+            {visibleListContacts.map((contact) => (
+              <label key={contact.id} className="flex min-w-0 items-center gap-3 rounded-2xl bg-slate-50 p-3">
+                <input type="checkbox" checked={selectedBroadcastContactIds.includes(contact.id!)} onChange={(event) => setSelectedBroadcastContactIds((current) => event.target.checked ? [...new Set([...current, contact.id!])] : current.filter((id) => id !== contact.id))} />
+                <span className="min-w-0 flex-1"><strong className="block truncate text-sm text-ink">{contactFullName(contact)}</strong><span className="text-xs text-slate-500">{contact.phone} · {contactLanguage(contact)}</span></span>
+              </label>
+            ))}
+          </div>
+        </Card>
+      </div>
+    );
+  };
+
+  const renderQueue = () => {
+    if (!currentQueueItem) return null;
+    const progress = queueProgress();
+    const media = mediaAssets.find((asset) => asset.id === (currentQueueItem.mediaAssetId || activeCampaign?.mediaAssetId));
+    return (
+      <Card className="border-gold/50">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><h2 className="text-lg font-black text-ink">{progress.done + 1} de {progress.total}</h2><p className="text-sm text-slate-500">{progress.pending} pendientes</p></div>
+          <Badge tone="warn">{currentQueueItem.status}</Badge>
+        </div>
+        <div className="mt-4 rounded-2xl bg-slate-50 p-4">
+          <h3 className="text-xl font-black text-ink">{contactFullName(currentQueueItem.contactSnapshot)}</h3>
+          <p className="text-sm text-slate-500">{currentQueueItem.contactSnapshot.phone} · {currentQueueItem.language || contactLanguage(currentQueueItem.contactSnapshot)} · {currentQueueItem.channel}</p>
+          <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700">{currentQueueItem.personalizedMessage || 'Solo media seleccionada.'}</p>
+          {media ? <p className="mt-3 text-sm font-bold text-brand">{media.kind === 'image' ? 'Imagen' : 'Video'}: {media.name}</p> : null}
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <PrimaryButton onClick={() => openWhatsAppFor(currentQueueItem)}><MessageCircle size={16} />WhatsApp</PrimaryButton>
+          <SecondaryButton onClick={() => openSmsFor(currentQueueItem)}><Phone size={16} />SMS</SecondaryButton>
+          <SecondaryButton onClick={() => copyMessage(currentQueueItem.personalizedMessage)}><Copy size={16} />Copiar</SecondaryButton>
+          <SecondaryButton onClick={() => shareQueueMedia(currentQueueItem)}><Share2 size={16} />Media</SecondaryButton>
+          <SecondaryButton onClick={() => setQueueStatus(currentQueueItem, 'Enviado', true)}><Check size={16} />Enviado y siguiente</SecondaryButton>
+          <SecondaryButton onClick={() => setQueueStatus(currentQueueItem, 'Omitido', true)}>Omitir</SecondaryButton>
+          <SecondaryButton onClick={() => setQueueStatus(currentQueueItem, 'Fallido', true)}>No se pudo enviar</SecondaryButton>
+        </div>
+      </Card>
+    );
+  };
+
+  const renderMediaLibrary = () => (
+    <Card>
+      <input ref={mediaInputRef} className="hidden" type="file" accept="image/*,video/*" onChange={handleMediaFile} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h2 className="text-lg font-black text-ink">{c.library}</h2><p className="text-sm text-slate-500">Imágenes y videos guardados localmente.</p></div>
+        <div className="flex gap-2"><input className="input w-40" value={assetName} onChange={(event) => setAssetName(event.target.value)} placeholder="Nombre" /><SecondaryButton onClick={() => mediaInputRef.current?.click()}><ImagePlus size={16} />Añadir</SecondaryButton></div>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {mediaAssets.map((asset) => (
+          <article key={asset.id} className="min-w-0 rounded-2xl bg-slate-50 p-3">
+            {asset.kind === 'image' ? <img src={asset.dataUrl} alt="" className="h-32 w-full rounded-xl object-cover" /> : <div className="grid h-32 place-items-center rounded-xl bg-black text-white"><FileImage /><span className="text-xs">{asset.type}</span></div>}
+            <div className="mt-3 flex min-w-0 items-center justify-between gap-2">
+              <span className="min-w-0"><strong className="block truncate text-sm text-ink">{asset.name}</strong><span className="text-xs text-slate-500">{Math.round(asset.size / 1024)} KB</span></span>
+              <IconButton label={c.delete} onClick={() => deleteMedia(asset.id)}><Trash2 size={16} /></IconButton>
+            </div>
+          </article>
+        ))}
+        {!mediaAssets.length ? <p className="text-sm text-slate-500">Sin media guardada.</p> : null}
+      </div>
+    </Card>
+  );
+
+  const renderFollowUps = () => (
+    <div className="grid gap-4">
+      <Header title={c.followUps} subtitle={c.followUpsSub} />
+      <div className="grid gap-3 sm:grid-cols-4">
+        <Card><p className="text-xs font-bold text-slate-500">Personas activas</p><strong className="text-3xl">{activeFollowPeople.length}</strong></Card>
+        <Card><p className="text-xs font-bold text-slate-500">Hoy</p><strong className="text-3xl">{todayTasks.filter((task) => taskType(task) === 'Seguimiento').length}</strong></Card>
+        <Card><p className="text-xs font-bold text-slate-500">Vencidos</p><strong className="text-3xl">{overdueTasks.filter((task) => taskType(task) === 'Seguimiento').length}</strong></Card>
+        <Card><p className="text-xs font-bold text-slate-500">30 días</p><strong className="text-3xl">{completedFollowPeople.length}</strong></Card>
+      </div>
+      <Card>
+        <form className="grid gap-3" onSubmit={saveFollowPerson}>
+          <h2 className="text-lg font-black text-ink">{c.addPeople}</h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label={c.name}><input className="input" value={followForm.firstName} onChange={(event) => setFollowForm((current) => ({ ...current, firstName: event.target.value }))} /></Field>
+            <Field label="Apellido"><input className="input" value={followForm.lastName} onChange={(event) => setFollowForm((current) => ({ ...current, lastName: event.target.value }))} /></Field>
+            <Field label={c.phone}><input className="input" value={followForm.phone} onChange={(event) => setFollowForm((current) => ({ ...current, phone: event.target.value }))} /></Field>
+            <Field label={c.language}><select className="input" value={followForm.language} onChange={(event) => setFollowForm((current) => ({ ...current, language: event.target.value as ContactLanguage }))}><option>Español</option><option>English</option></select></Field>
+            <Field label="Fecha de inicio"><input className="input" type="date" value={followForm.startDate} onChange={(event) => setFollowForm((current) => ({ ...current, startDate: event.target.value }))} /></Field>
+            <Field label={c.channel}><select className="input" value={followForm.channel} onChange={(event) => setFollowForm((current) => ({ ...current, channel: event.target.value as Exclude<Channel, 'Ambos'> }))}><option>WhatsApp</option><option>SMS</option></select></Field>
+            <Field label="Hora predeterminada"><input className="input" type="time" value={followForm.followUpTime} onChange={(event) => setFollowForm((current) => ({ ...current, followUpTime: event.target.value }))} /></Field>
+            <Field label="Recordatorio"><select className="input" value={followForm.reminderMinutes} onChange={(event) => setFollowForm((current) => ({ ...current, reminderMinutes: Number(event.target.value) as 15 | 30 }))}><option value={30}>30 minutos antes</option><option value={15}>15 minutos antes</option></select></Field>
+          </div>
+          <label className="flex items-center gap-2 rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700"><input type="checkbox" checked={followForm.weeklyEventsActive} onChange={(event) => setFollowForm((current) => ({ ...current, weeklyEventsActive: event.target.checked }))} />Recibir recordatorios del sistema semanal Golden Team</label>
+          <PrimaryButton type="submit"><Plus size={17} />Activar programa de 30 días</PrimaryButton>
+        </form>
+      </Card>
+      <Card>
+        <h2 className="text-lg font-black text-ink">{c.importContacts}</h2>
+        <div className="mt-3 grid gap-3">
+          <SecondaryButton onClick={() => importFromDeviceContacts('follow')}><Phone size={16} />Seleccionar desde teléfono</SecondaryButton>
+          <Field label="Pegar lista"><textarea className="input min-h-24" value={followImportText} onChange={(event) => setFollowImportText(event.target.value)} /></Field>
+          <SecondaryButton onClick={importFollowPaste}><Upload size={16} />Importar para configurar individualmente</SecondaryButton>
+        </div>
+      </Card>
+      <div className="grid gap-3">
+        {[...activeFollowPeople, ...completedFollowPeople].map((member) => renderMemberCard(member))}
+        {!members.length ? <Card><p className="text-sm text-slate-500">No hay personas en seguimiento.</p></Card> : null}
+      </div>
+      {selectedMember ? renderMemberDetail(selectedMember) : null}
+    </div>
+  );
+
+  const renderMemberCard = (member: Member) => {
+    const day = currentProgramDay(member.protocolStartDate);
+    const progress = day === null ? 0 : Math.min(100, Math.round((Math.min(day, 30) / 30) * 100));
+    const pending = tasks.filter((task) => task.memberId === member.id && task.status !== 'Completada').sort((a, b) => `${a.dueDate} ${a.dueTime}`.localeCompare(`${b.dueDate} ${b.dueTime}`))[0];
+    return (
+      <button key={member.id} onClick={() => setSelectedMemberId(member.id!)} className="min-w-0 rounded-[1.4rem] border border-slate-100 bg-white p-4 text-left shadow-sm">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0"><h3 className="truncate text-lg font-black text-ink">{memberName(member)}</h3><p className="text-sm text-slate-500">{member.phone} · {member.language || 'Español'} · {member.preferredChannel}</p></div>
+          <Badge tone={member.programStatus === 'Completado' ? 'good' : 'blue'}>{member.programStatus === 'Completado' ? '100%' : `Día ${Math.min(day ?? 0, 30)} de 30`}</Badge>
+        </div>
+        <div className="mt-3 h-2 rounded-full bg-slate-100"><div className="h-full rounded-full bg-gold" style={{ width: `${progress}%` }} /></div>
+        <p className="mt-2 text-sm text-slate-500">{pending ? `${pending.title} · ${shortDate(pending.dueDate, lang)} ${pending.dueTime}` : 'Sin tareas pendientes'}</p>
+      </button>
+    );
+  };
+
+  const renderMemberDetail = (member: Member) => {
+    const memberTasks = tasks.filter((task) => task.memberId === member.id).sort((a, b) => `${a.dueDate} ${a.dueTime}`.localeCompare(`${b.dueDate} ${b.dueTime}`));
+    const nextTask = memberTasks.find((task) => task.status !== 'Completada');
+    const day = currentProgramDay(member.protocolStartDate);
+    const progress = day === null ? 0 : Math.min(100, Math.round((Math.min(day, 30) / 30) * 100));
+    return (
+      <div className="fixed inset-0 z-50 overflow-y-auto bg-soft px-4 pb-6 pt-[calc(env(safe-area-inset-top)+1rem)]">
+        <div className="mx-auto grid max-w-2xl gap-4">
+          <button onClick={() => setSelectedMemberId(null)} className="inline-flex w-fit items-center gap-2 text-sm font-black text-brand"><ChevronLeft size={18} />{c.followUps}</button>
+          <Header title={memberName(member)} subtitle={`${member.phone} · ${member.language || 'Español'} · ${member.preferredChannel}`} />
+          <Card>
+            <div className="flex items-center justify-between gap-3"><div><p className="text-sm text-slate-500">Progreso</p><h2 className="text-3xl font-black text-ink">{member.programStatus === 'Completado' ? '100%' : `${progress}%`}</h2></div><Badge tone="blue">Día {Math.min(day ?? 0, 30)} de 30</Badge></div>
+            <div className="mt-3 h-3 rounded-full bg-slate-100"><div className="h-full rounded-full bg-gold" style={{ width: `${progress}%` }} /></div>
+            <div className="mt-4 flex flex-wrap gap-2"><SecondaryButton onClick={() => regenerateFollowTasks(member)}><Bell size={16} />Regenerar tareas</SecondaryButton>{member.programStatus === 'Completado' ? <SecondaryButton onClick={() => db.members.update(member.id!, { programStatus: 'Pausado' }).then(() => loadAll('Archivado.'))}>Archivar</SecondaryButton> : null}</div>
+          </Card>
+          {nextTask ? renderTaskDetail(nextTask) : <Card><p className="text-sm text-slate-500">No hay próxima tarea pendiente.</p></Card>}
+          <Card>
+            <h2 className="text-lg font-black text-ink">Tareas</h2>
+            <div className="mt-3 grid gap-2">{memberTasks.map((task) => <button key={task.id} onClick={() => setSelectedTaskId(task.id || null)} className="rounded-2xl bg-slate-50 p-3 text-left"><strong className="block text-sm text-ink">{task.title}</strong><span className="text-xs text-slate-500">{task.kind} · {shortDate(task.dueDate, lang)} {task.dueTime} · {task.status}</span></button>)}</div>
+          </Card>
+        </div>
+      </div>
+    );
+  };
+
+  const renderTasks = () => {
+    const source = taskGroup === 'Hoy' ? todayTasks : taskGroup === 'Vencidas' ? overdueTasks : taskGroup === 'Próximas' ? upcomingTasks : completedTasks;
+    const filtered = source.filter((task) => taskFilter === 'Todas' || taskType(task) === taskFilter);
+    return (
+      <div className="grid gap-4">
+        <Header title={c.tasks} subtitle={c.tasksSub} />
+        <div className="flex gap-2 overflow-x-auto pb-1">{taskGroups.map((group) => <button key={group} onClick={() => setTaskGroup(group)} className={`shrink-0 rounded-full px-4 py-2 text-sm font-black ${taskGroup === group ? 'bg-black text-white' : 'bg-white text-slate-600'}`}>{copy.es[group === 'Hoy' ? 'today' : group === 'Vencidas' ? 'overdue' : group === 'Próximas' ? 'upcoming' : 'completed'] || group}</button>)}</div>
+        <div className="flex gap-2 overflow-x-auto pb-1">{taskFilters.map((filter) => <button key={filter} onClick={() => setTaskFilter(filter)} className={`shrink-0 rounded-full px-4 py-2 text-sm font-black ${taskFilter === filter ? 'bg-brand text-white' : 'bg-white text-slate-600'}`}>{filter}</button>)}</div>
+        <div className="grid gap-3">
+          {filtered.map((task) => (
+            <button key={`${task.id}-${task.sourceKey}`} onClick={() => setSelectedTaskId(task.id || null)} className="min-w-0 rounded-[1.4rem] border border-slate-100 bg-white p-4 text-left shadow-sm">
+              <div className="flex min-w-0 justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-lg font-black text-ink">{task.contactName}</h3><p className="text-sm text-slate-500">{task.title}</p></div><Badge tone={task.status === 'Completada' ? 'good' : task.dueDate < todayKey() ? 'bad' : 'warn'}>{task.status}</Badge></div>
+              <p className="mt-2 text-sm text-slate-500">{taskType(task)} · {shortDate(task.dueDate, lang)} {task.dueTime} · {task.language || 'Español'} · {task.channel}</p>
+              <p className="mt-2 line-clamp-2 text-sm text-slate-600">{task.message}</p>
+            </button>
+          ))}
+          {!filtered.length ? <Card><p className="text-sm text-slate-500">Sin tareas en esta vista.</p></Card> : null}
+        </div>
+        {selectedTask ? <div className="fixed inset-0 z-50 overflow-y-auto bg-soft px-4 pb-6 pt-[calc(env(safe-area-inset-top)+1rem)]"><div className="mx-auto max-w-2xl">{renderTaskDetail(selectedTask, true)}</div></div> : null}
+      </div>
+    );
+  };
+
+  const renderTaskDetail = (task: FollowUpTask, modal = false) => (
+    <Card className="grid gap-4">
+      {modal ? <button onClick={() => setSelectedTaskId(null)} className="inline-flex w-fit items-center gap-2 text-sm font-black text-brand"><ChevronLeft size={18} />{c.tasks}</button> : null}
+      <div><h2 className="text-xl font-black text-ink">{task.title}</h2><p className="text-sm text-slate-500">{task.contactName} · {task.phone} · {task.language || 'Español'}</p></div>
+      <div className="rounded-2xl bg-slate-50 p-3"><p className="whitespace-pre-wrap text-sm text-slate-700">{task.message}</p>{task.meetingLink ? <button onClick={() => window.open(task.meetingLink, '_blank', 'noopener,noreferrer')} className="mt-3 inline-flex items-center gap-2 text-sm font-black text-brand"><ExternalLink size={16} />Zoom</button> : null}</div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {task.queueItemId ? <PrimaryButton onClick={() => { const item = queue.find((candidate) => candidate.id === task.queueItemId); if (item) { setActiveCampaignId(item.campaignId); setActive('difusion'); setSelectedTaskId(null); } }}><Play size={16} />Abrir cola</PrimaryButton> : null}
+        <PrimaryButton onClick={() => openWhatsAppFor(task)}><MessageCircle size={16} />WhatsApp</PrimaryButton>
+        <SecondaryButton onClick={() => openSmsFor(task)}><Phone size={16} />SMS</SecondaryButton>
+        <SecondaryButton onClick={() => copyMessage(task.message)}><Copy size={16} />Copiar</SecondaryButton>
+        <SecondaryButton onClick={() => completeTask(task)}><Check size={16} />Completar</SecondaryButton>
+        <SecondaryButton onClick={() => postponeTask(task, '30')}>30 min</SecondaryButton>
+        <SecondaryButton onClick={() => postponeTask(task, 'later')}>Más tarde</SecondaryButton>
+        <SecondaryButton onClick={() => postponeTask(task, 'tomorrow')}>Mañana 10:00</SecondaryButton>
+        <SecondaryButton onClick={() => postponeTask(task, 'custom')}>Elegir fecha</SecondaryButton>
+      </div>
+    </Card>
+  );
+
+  const currentView = active === 'inicio' ? renderHome() : active === 'difusion' ? renderBroadcast() : active === 'seguimiento' ? renderFollowUps() : renderTasks();
+
+  if (!ready) return <div className="theme-golden grid min-h-screen place-items-center bg-black text-white">Cargando Golden Team Connect...</div>;
+  if (!settings.sessionActive) return renderEntry();
+
+  return (
+    <div className="theme-golden min-h-screen overflow-x-hidden bg-soft text-ink">
+      <main className="mx-auto grid w-full max-w-5xl gap-4 px-4 pb-[calc(env(safe-area-inset-bottom)+6.25rem)] pt-[calc(env(safe-area-inset-top)+1rem)] sm:px-6 lg:pb-10">
+        {currentView}
+        <p className="text-center text-xs text-slate-500">{notice}</p>
+      </main>
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-3 pb-[calc(env(safe-area-inset-bottom)+0.55rem)] pt-2 backdrop-blur">
+        <div className="mx-auto grid max-w-2xl grid-cols-4 gap-2">
+          {navItems.map((item) => (
+            <button key={item.id} onClick={() => setActive(item.id)} className={`relative flex min-h-[62px] min-w-0 flex-col items-center justify-center gap-1 rounded-2xl px-1 text-[0.68rem] font-black leading-tight transition ${active === item.id ? 'bg-black text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'}`}>
+              {item.icon}
+              <span className="max-w-full text-center">{item.label}</span>
+              {item.id === 'tareas' && taskBadge ? <span className="absolute right-2 top-2 grid min-h-5 min-w-5 place-items-center rounded-full bg-gold px-1 text-[0.65rem] font-black text-black">{taskBadge}</span> : null}
+            </button>
+          ))}
+        </div>
+      </nav>
+      {accountOpen ? renderAccount() : null}
+    </div>
   );
 }
 

@@ -3,10 +3,12 @@ export type ContactStatus = 'Activo' | 'Pausado' | 'Dado de baja';
 export type Channel = 'WhatsApp' | 'SMS' | 'Ambos';
 export type QueueStatus = 'Pendiente' | 'Abierto' | 'Enviado' | 'Omitido' | 'Fallido';
 export type VisualTheme = 'golden' | 'classic' | 'emerald' | 'burgundy';
+export type AppLanguage = 'es' | 'en';
+export type ContactLanguage = 'Español' | 'English';
 export type MemberPurchaseType = 'Autosuscripción' | 'Compra única' | 'No sé';
 export type MemberInterest = 'Solo protocolo' | 'Interesado en negocio' | 'Distribuidor activo';
 export type MemberProgramStatus = 'Sin iniciar' | 'Activo' | 'Pausado' | 'Completado';
-export type TaskKind = 'Miembro' | 'Renovación' | 'Reunión' | 'LA Fitness';
+export type TaskKind = 'Difusión' | 'Seguimiento' | 'Reunión' | 'Miembro' | 'Renovación' | 'LA Fitness';
 export type TaskStatus = 'Pendiente' | 'Completada' | 'Pospuesta';
 
 export interface Member {
@@ -21,12 +23,15 @@ export interface Member {
   estimatedDeliveryDate?: string;
   protocolStartDate?: string;
   preferredChannel: Exclude<Channel, 'Ambos'>;
+  language?: ContactLanguage;
   purchaseType: MemberPurchaseType;
   interest: MemberInterest;
   notes?: string;
   programActive: boolean;
   programStatus: MemberProgramStatus;
   weeklyEventsActive?: boolean;
+  followUpTime?: string;
+  reminderMinutes?: 15 | 30;
   nextOrderDate?: string;
   createdAt: string;
   convertedFromContactId?: number;
@@ -43,8 +48,10 @@ export interface FollowUpTask {
   contactName: string;
   phone: string;
   channel: Exclude<Channel, 'Ambos'> | 'No definido';
+  language?: ContactLanguage;
   dueDate: string;
   dueTime: string;
+  reminderMinutes?: 15 | 30;
   programDay?: number;
   message: string;
   status: TaskStatus;
@@ -53,6 +60,7 @@ export interface FollowUpTask {
   notes?: string;
   createdAt: string;
   sourceKey?: string;
+  meetingLink?: string;
 }
 
 export interface WeeklyEvent {
@@ -63,6 +71,7 @@ export interface WeeklyEvent {
   reminderTime: string;
   link: string;
   message: string;
+  messageEn?: string;
   active: boolean;
   updatedAt: string;
 }
@@ -82,6 +91,7 @@ export interface Contact {
   createdAt: string;
   status: ContactStatus;
   preferredChannel: Channel;
+  language?: ContactLanguage;
   consent: boolean;
   consentDate?: string;
   unsubscribedAt?: string;
@@ -92,6 +102,9 @@ export interface InternalList {
   id?: number;
   name: string;
   description?: string;
+  lastMessageEs?: string;
+  lastMessageEn?: string;
+  lastSentAt?: string;
   createdAt: string;
   demo?: boolean;
 }
@@ -112,6 +125,16 @@ export interface CampaignImage {
   updatedAt: string;
 }
 
+export interface MediaAsset {
+  id?: number;
+  name: string;
+  type: string;
+  dataUrl: string;
+  size: number;
+  kind: 'image' | 'video';
+  createdAt: string;
+}
+
 export interface Campaign {
   id?: number;
   name: string;
@@ -122,6 +145,8 @@ export interface Campaign {
   channel: Channel;
   notes?: string;
   image?: CampaignImage;
+  mediaAssetId?: number;
+  audienceLanguage?: ContactLanguage | 'Manual';
   createdAt: string;
   demo?: boolean;
 }
@@ -133,6 +158,8 @@ export interface QueueItem {
   contactSnapshot: Contact;
   listNames: string[];
   channel: Channel;
+  language?: ContactLanguage;
+  mediaAssetId?: number;
   personalizedMessage: string;
   status: QueueStatus;
   openedAt?: string;
@@ -145,6 +172,8 @@ export interface AppSettings {
   ownerName: string;
   feelGreatLink?: string;
   sessionActive?: boolean;
+  profilePhoto?: string;
+  preferredLanguage?: AppLanguage;
   visualTheme?: VisualTheme;
   personalNumber: string;
   defaultCountryCode: string;
@@ -174,5 +203,6 @@ export interface BackupFile {
   members?: Member[];
   tasks?: FollowUpTask[];
   weeklyEvents?: WeeklyEvent[];
+  mediaAssets?: MediaAsset[];
   settings: AppSettings;
 }

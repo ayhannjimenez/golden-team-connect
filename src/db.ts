@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { AppSettings, Campaign, Contact, FollowUpTask, InternalList, Member, MessageTemplate, QueueItem, WeeklyEvent } from './types';
+import type { AppSettings, Campaign, Contact, FollowUpTask, InternalList, MediaAsset, Member, MessageTemplate, QueueItem, WeeklyEvent } from './types';
 
 export class LocalDatabase extends Dexie {
   contacts!: Table<Contact, number>;
@@ -10,6 +10,7 @@ export class LocalDatabase extends Dexie {
   members!: Table<Member, number>;
   tasks!: Table<FollowUpTask, number>;
   weeklyEvents!: Table<WeeklyEvent, number>;
+  mediaAssets!: Table<MediaAsset, number>;
   settings!: Table<AppSettings, string>;
 
   constructor() {
@@ -33,6 +34,18 @@ export class LocalDatabase extends Dexie {
       weeklyEvents: '++id, name, weekday, active',
       settings: 'id'
     });
+    this.version(3).stores({
+      contacts: '++id, &phone, firstName, lastName, status, category, preferredChannel, language, *listIds, demo',
+      lists: '++id, name, demo',
+      templates: '++id, name, demo',
+      campaigns: '++id, name, createdAt, demo',
+      queue: '++id, campaignId, contactId, status, language',
+      members: '++id, &phone, firstName, lastName, programStatus, interest, protocolStartDate, language, nextOrderDate',
+      tasks: '++id, memberId, contactId, queueItemId, kind, status, dueDate, sourceKey, language',
+      weeklyEvents: '++id, name, weekday, active',
+      mediaAssets: '++id, name, kind, createdAt',
+      settings: 'id'
+    });
   }
 }
 
@@ -43,6 +56,8 @@ export const defaultSettings: AppSettings = {
   ownerName: '',
   feelGreatLink: '',
   sessionActive: false,
+  profilePhoto: '',
+  preferredLanguage: 'es',
   visualTheme: 'golden',
   personalNumber: '14075063846',
   defaultCountryCode: '1',
@@ -67,8 +82,8 @@ export async function ensureSettings(): Promise<AppSettings> {
 }
 
 export async function clearAllData(): Promise<void> {
-  await db.transaction('rw', [db.contacts, db.lists, db.templates, db.campaigns, db.queue, db.members, db.tasks, db.weeklyEvents, db.settings], async () => {
-    await Promise.all([db.contacts.clear(), db.lists.clear(), db.templates.clear(), db.campaigns.clear(), db.queue.clear(), db.members.clear(), db.tasks.clear(), db.weeklyEvents.clear()]);
+  await db.transaction('rw', [db.contacts, db.lists, db.templates, db.campaigns, db.queue, db.members, db.tasks, db.weeklyEvents, db.mediaAssets, db.settings], async () => {
+    await Promise.all([db.contacts.clear(), db.lists.clear(), db.templates.clear(), db.campaigns.clear(), db.queue.clear(), db.members.clear(), db.tasks.clear(), db.weeklyEvents.clear(), db.mediaAssets.clear()]);
     await db.settings.put({ ...defaultSettings, demoSeeded: false });
   });
 }

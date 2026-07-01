@@ -34,6 +34,12 @@ export interface CsvPreview {
 const allowedCategories = ['Miembro', 'Cliente', 'Distribuidor', 'Lider', 'Prospecto', 'Otro'];
 const allowedChannels = ['WhatsApp', 'SMS', 'Ambos'];
 
+function normalizeLanguage(value?: string): 'Español' | 'English' {
+  const clean = (value || '').trim().toLowerCase();
+  if (['english', 'en', 'inglés', 'ingles'].includes(clean)) return 'English';
+  return 'Español';
+}
+
 export function parseContactsCsv(csv: string, existingPhones: string[] = [], defaultCountryCode = '1'): CsvPreview {
   const parsed = Papa.parse<CsvImportRow>(csv, { header: true, skipEmptyLines: true, transformHeader: (h) => h.trim().toLowerCase() });
   const seen = new Set(existingPhones);
@@ -78,11 +84,12 @@ export function csvRowToContact(
     email: row.email || '',
     category: allowedCategories.includes(row.categoria || '') ? (row.categoria as Contact['category']) : 'Prospecto',
     listIds,
-    tags: [row.ubicacion || row.location ? `Gimnasio:${row.ubicacion || row.location}` : '', row.idioma || row.language ? `Idioma:${row.idioma || row.language}` : '', 'Primer mensaje pendiente'].filter(Boolean),
+    tags: [row.ubicacion || row.location ? `Gimnasio:${row.ubicacion || row.location}` : '', `Idioma:${normalizeLanguage(row.idioma || row.language)}`, 'Primer mensaje pendiente'].filter(Boolean),
     notes: row.notas || '',
     createdAt: new Date().toISOString(),
     status: 'Activo',
     preferredChannel: allowedChannels.includes(row.canal_preferido || '') ? (row.canal_preferido as Contact['preferredChannel']) : 'WhatsApp',
+    language: normalizeLanguage(row.idioma || row.language),
     consent: ['si', 'sí', 'true', '1', 'yes'].includes((row.consentimiento || '').toLowerCase()),
     consentDate: ['si', 'sí', 'true', '1', 'yes'].includes((row.consentimiento || '').toLowerCase()) ? new Date().toISOString() : undefined
   };
@@ -101,6 +108,7 @@ export function exportContactsCsv(contacts: Contact[]): string {
       notas: contact.notes || '',
       consentimiento: contact.consent ? 'si' : 'no',
       canal_preferido: contact.preferredChannel,
+      idioma: contact.language || contact.tags.find((tag) => tag.startsWith('Idioma:'))?.slice(7) || 'Español',
       estado: contact.status
     }))
   );
