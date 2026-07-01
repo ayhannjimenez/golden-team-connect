@@ -46,6 +46,18 @@ export class LocalDatabase extends Dexie {
       mediaAssets: '++id, name, kind, createdAt',
       settings: 'id'
     });
+    this.version(4).stores({
+      contacts: '++id, &phone, firstName, lastName, status, category, preferredChannel, language, *listIds, demo',
+      lists: '++id, name, demo',
+      templates: '++id, name, demo',
+      campaigns: '++id, name, createdAt, demo',
+      queue: '++id, campaignId, contactId, status, language',
+      members: '++id, &phone, firstName, lastName, programStatus, interest, protocolStartDate, language, nextOrderDate',
+      tasks: '++id, memberId, contactId, queueItemId, kind, status, dueDate, sourceKey, language',
+      weeklyEvents: '++id, name, weekday, active',
+      mediaAssets: '++id, name, kind, createdAt, source, driveFileId',
+      settings: 'id'
+    });
   }
 }
 
@@ -58,6 +70,9 @@ export const defaultSettings: AppSettings = {
   sessionActive: false,
   profilePhoto: '',
   preferredLanguage: 'es',
+  googleDriveConnection: 'disconnected',
+  googleDriveAccount: '',
+  googleDriveTokenHint: '',
   visualTheme: 'golden',
   personalNumber: '14075063846',
   defaultCountryCode: '1',

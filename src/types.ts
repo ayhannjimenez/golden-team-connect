@@ -133,6 +133,12 @@ export interface MediaAsset {
   size: number;
   kind: 'image' | 'video';
   createdAt: string;
+  source?: 'local' | 'google-drive';
+  driveFileId?: string;
+  driveMimeType?: string;
+  driveThumbnail?: string;
+  driveWebViewLink?: string;
+  driveDownloadMetadata?: string;
 }
 
 export interface Campaign {
@@ -174,6 +180,9 @@ export interface AppSettings {
   sessionActive?: boolean;
   profilePhoto?: string;
   preferredLanguage?: AppLanguage;
+  googleDriveConnection?: 'disconnected' | 'connected';
+  googleDriveAccount?: string;
+  googleDriveTokenHint?: string;
   visualTheme?: VisualTheme;
   personalNumber: string;
   defaultCountryCode: string;

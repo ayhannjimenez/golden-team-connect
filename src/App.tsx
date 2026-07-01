@@ -5,6 +5,8 @@ import {
   Camera,
   Check,
   ChevronLeft,
+  ChevronRight,
+  Cloud,
   Copy,
   Download,
   ExternalLink,
@@ -12,12 +14,10 @@ import {
   EyeOff,
   FileImage,
   Home,
-  ImagePlus,
   Library,
   LogOut,
   MessageCircle,
   Phone,
-  Play,
   Plus,
   Send,
   Share2,
@@ -39,9 +39,14 @@ type MainSection = 'inicio' | 'difusion' | 'seguimiento' | 'tareas';
 type TaskGroup = 'Hoy' | 'Vencidas' | 'Próximas' | 'Completadas';
 type TaskFilter = 'Todas' | 'Difusión' | 'Seguimiento' | 'Reuniones';
 type Audience = ContactLanguage | 'Manual';
+type AccountPanel = 'profile' | 'link' | 'language' | null;
+type BroadcastTab = 'lists' | 'library';
+type DriveFilter = 'all' | 'photos' | 'videos';
 
-const logoSrc = `${import.meta.env.BASE_URL}golden-team-logo.jpeg`;
 const entryLogoSrc = `${import.meta.env.BASE_URL}golden-team-logo-transparent.png`;
+const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+const googleApiKey = import.meta.env.VITE_GOOGLE_API_KEY || '';
+const googleAppId = import.meta.env.VITE_GOOGLE_APP_ID || '';
 const contactLanguages: ContactLanguage[] = ['Español', 'English'];
 const taskGroups: TaskGroup[] = ['Hoy', 'Vencidas', 'Próximas', 'Completadas'];
 const taskFilters: TaskFilter[] = ['Todas', 'Difusión', 'Seguimiento', 'Reuniones'];
@@ -59,11 +64,22 @@ const copy = {
     broadcast: 'Difusión',
     broadcastSub: 'Crea una lista, prepara tu contenido y envíalo contacto por contacto.',
     newList: 'Nueva lista',
+    lists: 'Listas',
     library: 'Biblioteca',
-    continueQueue: 'Continuar envío',
+    connectDriveTitle: 'Conecta tu Google Drive para acceder y reutilizar tus fotos y videos.',
+    connectDrive: 'Conectar Google Drive',
+    drivePending: 'Configuración de Google pendiente',
+    addFromDrive: 'Añadir desde Drive',
+    uploadToDrive: 'Subir a Drive',
+    disconnectDrive: 'Desconectar Drive',
+    all: 'Todo',
+    photos: 'Fotos',
+    videos: 'Videos',
+    noContent: 'No hay contenido seleccionado.',
     followUps: 'Seguimiento',
     followUpsSub: 'Acompaña cada persona durante sus primeros 30 días.',
-    addPeople: 'Añadir personas',
+    addPeople: 'Añadir persona',
+    importContact: 'Importar contacto',
     importContacts: 'Importar contactos',
     tasks: 'Tareas',
     tasksSub: 'Mensajes y acciones que requieren tu atención.',
@@ -94,11 +110,22 @@ const copy = {
     broadcast: 'Broadcast',
     broadcastSub: 'Create a list, prepare your content, and send it contact by contact.',
     newList: 'New list',
+    lists: 'Lists',
     library: 'Library',
-    continueQueue: 'Continue sending',
+    connectDriveTitle: 'Connect your Google Drive to access and reuse your photos and videos.',
+    connectDrive: 'Connect Google Drive',
+    drivePending: 'Google configuration pending',
+    addFromDrive: 'Add from Drive',
+    uploadToDrive: 'Upload to Drive',
+    disconnectDrive: 'Disconnect Drive',
+    all: 'All',
+    photos: 'Photos',
+    videos: 'Videos',
+    noContent: 'No content selected.',
     followUps: 'Follow-ups',
     followUpsSub: 'Support each person during their first 30 days.',
-    addPeople: 'Add people',
+    addPeople: 'Add person',
+    importContact: 'Import contact',
     importContacts: 'Import contacts',
     tasks: 'Tasks',
     tasksSub: 'Messages and actions that need your attention.',
@@ -177,6 +204,22 @@ function readableUrl(url?: string) {
   return url.replace(/^https?:\/\//, '').replace(/\/$/, '');
 }
 
+function googleConfigured() {
+  return Boolean(googleClientId && googleApiKey && googleAppId);
+}
+
+function driveConfigMissing(language: AppLanguage) {
+  const missing = [
+    !googleClientId ? 'VITE_GOOGLE_CLIENT_ID' : '',
+    !googleApiKey ? 'VITE_GOOGLE_API_KEY' : '',
+    !googleAppId ? 'VITE_GOOGLE_APP_ID' : ''
+  ].filter(Boolean);
+  if (!missing.length) return '';
+  return language === 'en'
+    ? `Missing Google Cloud values: ${missing.join(', ')}.`
+    : `Faltan valores de Google Cloud: ${missing.join(', ')}.`;
+}
+
 function downloadFile(content: string, filename: string, type: string) {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
@@ -190,6 +233,10 @@ function downloadFile(content: string, filename: string, type: string) {
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   return (parts[0]?.[0] || 'G').toUpperCase();
+}
+
+function GlobeIcon() {
+  return <span className="text-lg font-black">文</span>;
 }
 
 function Field({ label, children, helper }: { label: string; children: ReactNode; helper?: ReactNode }) {
@@ -227,12 +274,12 @@ function IconButton({ label, children, onClick, className = '' }: { label: strin
 }
 
 function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <section className={`min-w-0 rounded-[1.4rem] border border-slate-100 bg-white p-4 shadow-sm ${className}`}>{children}</section>;
+  return <section className={`min-w-0 rounded-[1.4rem] border border-slate-200 bg-white p-4 shadow-sm ${className}`}>{children}</section>;
 }
 
-function Header({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
+function Header({ title, subtitle, action, children }: { title: string; subtitle: string; action?: ReactNode; children?: ReactNode }) {
   return (
-    <section className="min-w-0 rounded-[1.7rem] bg-black p-5 text-white shadow-soft">
+    <section className="-mx-4 -mt-[calc(env(safe-area-inset-top)+1rem)] min-w-0 rounded-b-[2rem] bg-brand px-4 pb-6 pt-[calc(env(safe-area-inset-top)+1.25rem)] text-white shadow-soft sm:-mx-6 sm:px-6">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-2xl font-black tracking-normal">{title}</h1>
@@ -240,6 +287,7 @@ function Header({ title, subtitle, action }: { title: string; subtitle: string; 
         </div>
         {action}
       </div>
+      {children ? <div className="mt-5">{children}</div> : null}
     </section>
   );
 }
@@ -249,7 +297,7 @@ function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'ne
     tone === 'good'
       ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
       : tone === 'warn'
-        ? 'border-amber-200 bg-amber-50 text-amber-800'
+        ? 'border-gold/40 bg-gold/15 text-brand'
         : tone === 'bad'
           ? 'border-red-200 bg-red-50 text-red-800'
           : tone === 'blue'
@@ -278,9 +326,12 @@ function App() {
   const [showAccessCode, setShowAccessCode] = useState(false);
   const [entryError, setEntryError] = useState('');
   const [accountOpen, setAccountOpen] = useState(false);
+  const [accountPanel, setAccountPanel] = useState<AccountPanel>(null);
   const [profileName, setProfileName] = useState('');
   const [profileLink, setProfileLink] = useState('');
   const [selectedListId, setSelectedListId] = useState<number | null>(null);
+  const [broadcastTab, setBroadcastTab] = useState<BroadcastTab>('lists');
+  const [newListOpen, setNewListOpen] = useState(false);
   const [listName, setListName] = useState('');
   const [listLanguageFilter, setListLanguageFilter] = useState<'Todos' | ContactLanguage>('Todos');
   const [broadcastContact, setBroadcastContact] = useState({ firstName: '', lastName: '', phone: '', language: 'Español' as ContactLanguage, channel: 'WhatsApp' as Channel });
@@ -294,7 +345,7 @@ function App() {
   const [selectedMediaId, setSelectedMediaId] = useState<number | ''>('');
   const [activeCampaignId, setActiveCampaignId] = useState<number | null>(null);
   const [queueIndex, setQueueIndex] = useState(0);
-  const [assetName, setAssetName] = useState('');
+  const [driveFilter, setDriveFilter] = useState<DriveFilter>('all');
   const [followForm, setFollowForm] = useState({
     firstName: '',
     lastName: '',
@@ -324,6 +375,7 @@ function App() {
   const selectedTask = useMemo(() => [...tasks, ...queueTasksFromQueue(queue)].find((task) => task.id === selectedTaskId) || null, [queue, selectedTaskId, tasks]);
 
   async function loadAll(message?: string) {
+    await cleanupDemoRecords();
     const [loadedSettings, loadedContacts, loadedLists, loadedCampaigns, loadedQueue, loadedMembers, loadedTasks, loadedEvents, loadedMedia] = await Promise.all([
       ensureSettings(),
       db.contacts.orderBy('firstName').toArray(),
@@ -356,6 +408,20 @@ function App() {
     }
     setReady(true);
     if (message) setNotice(message);
+  }
+
+  async function cleanupDemoRecords() {
+    await db.transaction('rw', [db.contacts, db.lists, db.templates, db.campaigns, db.queue, db.settings], async () => {
+      await Promise.all([
+        db.queue.filter((item) => Boolean(item.contactSnapshot?.demo)).delete(),
+        db.contacts.where('demo').equals(1).delete(),
+        db.lists.where('demo').equals(1).delete(),
+        db.templates.where('demo').equals(1).delete(),
+        db.campaigns.where('demo').equals(1).delete()
+      ]);
+      const current = await ensureSettings();
+      if (current.demoSeeded) await db.settings.put({ ...current, demoSeeded: false });
+    });
   }
 
   useEffect(() => {
@@ -493,6 +559,7 @@ function App() {
     if (!name) return setNotice(lang === 'en' ? 'List name is required.' : 'Escribe el nombre de la lista.');
     const id = await db.lists.add({ name, createdAt: todayIso() });
     setListName('');
+    setNewListOpen(false);
     setSelectedListId(id);
     await loadAll(lang === 'en' ? 'List created.' : 'Lista creada.');
   }
@@ -596,14 +663,13 @@ function App() {
       if (file.type.startsWith('video/') && file.size > 25_000_000) throw new Error(lang === 'en' ? 'This video is too large for local storage.' : 'Este video es muy grande para guardarlo localmente.');
       const payload = file.type.startsWith('image/') ? await compressImage(file) : { dataUrl: await fileToDataUrl(file), size: file.size };
       await db.mediaAssets.add({
-        name: assetName.trim() || file.name,
+        name: file.name,
         type: file.type,
         dataUrl: payload.dataUrl,
         size: payload.size,
         kind: file.type.startsWith('image/') ? 'image' : 'video',
         createdAt: todayIso()
       });
-      setAssetName('');
       await loadAll(lang === 'en' ? 'Media saved.' : 'Media guardada.');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'No se pudo guardar el archivo.');
@@ -617,6 +683,30 @@ function App() {
     await db.mediaAssets.delete(id);
     if (selectedMediaId === id) setSelectedMediaId('');
     await loadAll(lang === 'en' ? 'Media deleted.' : 'Media eliminada.');
+  }
+
+  function connectGoogleDrive() {
+    if (!googleConfigured()) return setNotice(`${c.drivePending}. ${driveConfigMissing(lang)}`);
+    const redirectUri = `${window.location.origin}${window.location.pathname}`;
+    const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    authUrl.searchParams.set('client_id', googleClientId);
+    authUrl.searchParams.set('redirect_uri', redirectUri);
+    authUrl.searchParams.set('response_type', 'token');
+    authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/drive.file');
+    authUrl.searchParams.set('include_granted_scopes', 'true');
+    authUrl.searchParams.set('prompt', 'consent');
+    window.open(authUrl.toString(), '_blank', 'noopener,noreferrer');
+    setNotice(lang === 'en' ? 'Use the official Google consent screen. Picker credentials are configured by environment variables.' : 'Usa la pantalla oficial de Google. Las credenciales del Picker se configuran con variables de entorno.');
+  }
+
+  async function disconnectGoogleDrive() {
+    if (!confirm(lang === 'en' ? 'Disconnect Google Drive? Original files will not be deleted.' : '¿Desconectar Google Drive? No se borrarán los archivos originales.')) return;
+    await saveSettingsPatch({ googleDriveConnection: 'disconnected', googleDriveAccount: '', googleDriveTokenHint: '' }, lang === 'en' ? 'Drive disconnected.' : 'Drive desconectado.');
+  }
+
+  function addFromDrive() {
+    if (!googleConfigured()) return setNotice(`${c.drivePending}. ${driveConfigMissing(lang)}`);
+    setNotice(lang === 'en' ? 'Google Picker is ready to be enabled with your OAuth Client ID, API Key, and App ID.' : 'Google Picker queda listo para activarse con OAuth Client ID, API Key y App ID.');
   }
 
   function previewBroadcastContacts() {
@@ -900,25 +990,19 @@ function App() {
 
   const renderHome = () => (
     <div className="grid gap-4">
-      <button onClick={() => setAccountOpen(true)} className="min-w-0 rounded-[2rem] bg-black p-5 text-left text-white shadow-soft">
+      <button onClick={() => setAccountOpen(true)} className="-mx-4 -mt-[calc(env(safe-area-inset-top)+1rem)] min-w-0 rounded-b-[2rem] bg-brand px-4 pb-7 pt-[calc(env(safe-area-inset-top)+1.5rem)] text-left text-white shadow-soft sm:-mx-6 sm:px-6">
         <div className="flex min-w-0 items-center gap-4">
-          <img src={logoSrc} alt="Golden Team" className="h-14 w-14 shrink-0 rounded-2xl object-cover" />
+          {settings.profilePhoto ? <img src={settings.profilePhoto} alt="" className="h-16 w-16 shrink-0 rounded-full object-cover ring-2 ring-white/20" /> : <div className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-white/10 text-xl font-black ring-2 ring-white/20">{initials(displayName(settings))}</div>}
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-bold text-gold">{c.homeTitle}, {firstName(settings)}</p>
-            <h1 className="mt-1 truncate text-2xl font-black tracking-normal">{displayName(settings)}</h1>
-            <p className="mt-1 truncate text-sm text-white/65">{readableUrl(settings.feelGreatLink)}</p>
+            <h1 className="truncate text-2xl font-black tracking-normal">{c.homeTitle}, {firstName(settings)}</h1>
+            <p className="mt-1 text-sm font-semibold text-white/65">{lang === 'en' ? 'Tap to open account' : 'Toca para abrir Cuenta'}</p>
           </div>
-          {settings.profilePhoto ? <img src={settings.profilePhoto} alt="" className="h-14 w-14 shrink-0 rounded-full object-cover" /> : <div className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-white/10 text-xl font-black">{initials(displayName(settings))}</div>}
-        </div>
-        <div className="mt-5 flex flex-wrap gap-2" onClick={(event) => event.stopPropagation()}>
-          <SecondaryButton onClick={copyFeelGreatLink} className="border-white/15 bg-white/10 text-white hover:border-gold hover:text-gold"><Copy size={16} />{c.copy}</SecondaryButton>
-          <SecondaryButton onClick={shareFeelGreatLink} className="border-white/15 bg-white/10 text-white hover:border-gold hover:text-gold"><Share2 size={16} />{c.share}</SecondaryButton>
-          <SecondaryButton onClick={openFeelGreatLink} className="border-white/15 bg-white/10 text-white hover:border-gold hover:text-gold"><ExternalLink size={16} />{c.myLink}</SecondaryButton>
+          <ChevronRight className="shrink-0 text-white/70" />
         </div>
       </button>
       <div className="grid gap-3 sm:grid-cols-3">
-        <Card><p className="text-xs font-bold text-slate-500">{c.broadcast}</p><strong className="text-3xl text-ink">{lists.length}</strong><p className="text-sm text-slate-500">listas</p></Card>
-        <Card><p className="text-xs font-bold text-slate-500">{c.followUps}</p><strong className="text-3xl text-ink">{activeFollowPeople.length}</strong><p className="text-sm text-slate-500">activas</p></Card>
+        <Card><p className="text-xs font-bold text-slate-500">{c.broadcast}</p><strong className="text-3xl text-ink">{lists.length}</strong><p className="text-sm text-slate-500">{lang === 'en' ? 'lists' : 'listas'}</p></Card>
+        <Card><p className="text-xs font-bold text-slate-500">{c.followUps}</p><strong className="text-3xl text-ink">{activeFollowPeople.length}</strong><p className="text-sm text-slate-500">{lang === 'en' ? 'active' : 'activos'}</p></Card>
         <Card><p className="text-xs font-bold text-slate-500">{c.tasks}</p><strong className="text-3xl text-ink">{taskBadge}</strong><p className="text-sm text-slate-500">{lang === 'en' ? 'today + overdue' : 'hoy + vencidas'}</p></Card>
       </div>
       <Card>
@@ -937,52 +1021,72 @@ function App() {
   );
 
   const renderAccount = () => (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-soft px-4 pb-6 pt-[calc(env(safe-area-inset-top)+1rem)]">
-      <div className="mx-auto grid max-w-2xl gap-4">
-        <div className="flex items-center justify-between">
-          <button onClick={() => setAccountOpen(false)} className="inline-flex items-center gap-2 text-sm font-black text-brand"><ChevronLeft size={18} />{c.account}</button>
-          <IconButton label="Cerrar" onClick={() => setAccountOpen(false)}><X /></IconButton>
-        </div>
-        <Header title={displayName(settings)} subtitle={readableUrl(settings.feelGreatLink)} action={settings.profilePhoto ? <img src={settings.profilePhoto} className="h-16 w-16 rounded-full object-cover" alt="" /> : <div className="grid h-16 w-16 rounded-full bg-white/10 text-xl font-black">{initials(displayName(settings))}</div>} />
-        <Card>
-          <h2 className="text-lg font-black text-ink">{c.profileInfo}</h2>
-          <form className="mt-4 grid gap-3" onSubmit={saveProfile}>
-            <Field label={c.name}><input className="input" value={profileName} onChange={(event) => setProfileName(event.target.value)} /></Field>
-            <input ref={photoInputRef} className="hidden" type="file" accept="image/*" onChange={handleProfilePhoto} />
-            <div className="flex flex-wrap gap-2">
-              <SecondaryButton onClick={() => photoInputRef.current?.click()}><Camera size={16} />{settings.profilePhoto ? (lang === 'en' ? 'Change photo' : 'Cambiar foto') : (lang === 'en' ? 'Add photo' : 'Añadir foto')}</SecondaryButton>
-              {settings.profilePhoto ? <SecondaryButton onClick={() => saveSettingsPatch({ profilePhoto: '' }, lang === 'en' ? 'Photo removed.' : 'Foto eliminada.')}><Trash2 size={16} />{lang === 'en' ? 'Remove photo' : 'Eliminar foto'}</SecondaryButton> : null}
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-soft pb-6">
+      <div className="mx-auto grid max-w-2xl gap-4 px-4 sm:px-6">
+        <Header
+          title={accountPanel ? (accountPanel === 'profile' ? c.profileInfo : accountPanel === 'link' ? c.feelLink : c.language) : c.account}
+          subtitle={accountPanel ? displayName(settings) : ''}
+          action={settings.profilePhoto ? <img src={settings.profilePhoto} className="h-16 w-16 rounded-full object-cover ring-2 ring-white/20" alt="" /> : <div className="grid h-16 w-16 place-items-center rounded-full bg-white/10 text-xl font-black ring-2 ring-white/20">{initials(displayName(settings))}</div>}
+        >
+          <button onClick={() => accountPanel ? setAccountPanel(null) : setAccountOpen(false)} className="inline-flex min-h-11 items-center gap-2 rounded-2xl bg-white/10 px-3 text-sm font-black text-white"><ChevronLeft size={18} />{accountPanel ? c.account : (lang === 'en' ? 'Back' : 'Atrás')}</button>
+        </Header>
+        {!accountPanel ? (
+          <Card className="p-2">
+            {[
+              { id: 'profile' as const, icon: <Camera size={20} />, title: c.profileInfo, value: displayName(settings) },
+              { id: 'link' as const, icon: <ExternalLink size={20} />, title: c.feelLink, value: settings.feelGreatLink ? readableUrl(settings.feelGreatLink) : (lang === 'en' ? 'Not set' : 'Sin configurar') },
+              { id: 'language' as const, icon: <GlobeIcon />, title: c.language, value: lang === 'en' ? 'English' : 'Español' }
+            ].map((row) => (
+              <button key={row.id} onClick={() => setAccountPanel(row.id)} className="flex min-h-16 w-full min-w-0 items-center gap-3 rounded-2xl px-3 text-left hover:bg-slate-50">
+                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-slate-100 text-brand">{row.icon}</span>
+                <span className="min-w-0 flex-1"><strong className="block text-sm text-ink">{row.title}</strong><span className="block truncate text-xs text-slate-500">{row.value}</span></span>
+                <ChevronRight className="shrink-0 text-slate-400" />
+              </button>
+            ))}
+            <button onClick={closeSession} className="flex min-h-16 w-full min-w-0 items-center gap-3 rounded-2xl px-3 text-left hover:bg-slate-50">
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-slate-100 text-brand"><LogOut size={20} /></span>
+              <span className="min-w-0 flex-1"><strong className="block text-sm text-ink">{c.logout}</strong><span className="block truncate text-xs text-slate-500">{lang === 'en' ? 'Keeps all local data' : 'Conserva todos los datos locales'}</span></span>
+              <ChevronRight className="shrink-0 text-slate-400" />
+            </button>
+          </Card>
+        ) : null}
+        {accountPanel === 'profile' ? (
+          <Card>
+            <form className="grid gap-4" onSubmit={saveProfile}>
+              <div className="grid place-items-center gap-3">
+                {settings.profilePhoto ? <img src={settings.profilePhoto} className="h-24 w-24 rounded-full object-cover" alt="" /> : <div className="grid h-24 w-24 place-items-center rounded-full bg-brand text-3xl font-black text-white">{initials(displayName(settings))}</div>}
+                <input ref={photoInputRef} className="hidden" type="file" accept="image/*" onChange={handleProfilePhoto} />
+                <div className="flex flex-wrap justify-center gap-2">
+                  <SecondaryButton onClick={() => photoInputRef.current?.click()}><Camera size={16} />{settings.profilePhoto ? (lang === 'en' ? 'Change photo' : 'Cambiar foto') : (lang === 'en' ? 'Add photo' : 'Añadir foto')}</SecondaryButton>
+                  {settings.profilePhoto ? <SecondaryButton onClick={() => saveSettingsPatch({ profilePhoto: '' }, lang === 'en' ? 'Photo removed.' : 'Foto eliminada.')}><Trash2 size={16} />{lang === 'en' ? 'Remove photo' : 'Eliminar foto'}</SecondaryButton> : null}
+                </div>
+              </div>
+              <Field label={c.name}><input className="input" value={profileName} onChange={(event) => setProfileName(event.target.value)} /></Field>
               <PrimaryButton type="submit"><Check size={16} />{c.save}</PrimaryButton>
+            </form>
+          </Card>
+        ) : null}
+        {accountPanel === 'link' ? (
+          <Card>
+            <form className="grid gap-3" onSubmit={saveProfile}>
+              <Field label="Feel Great Link"><input className="input" value={profileLink} onChange={(event) => setProfileLink(event.target.value)} /></Field>
+              <div className="grid grid-cols-2 gap-2">
+                <PrimaryButton type="submit"><Check size={16} />{c.save}</PrimaryButton>
+                <SecondaryButton onClick={copyFeelGreatLink}><Copy size={16} />{c.copy}</SecondaryButton>
+                <SecondaryButton onClick={shareFeelGreatLink}><Share2 size={16} />{c.share}</SecondaryButton>
+                <SecondaryButton onClick={openFeelGreatLink}><ExternalLink size={16} />{c.open}</SecondaryButton>
+              </div>
+            </form>
+          </Card>
+        ) : null}
+        {accountPanel === 'language' ? (
+          <Card>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => saveSettingsPatch({ preferredLanguage: 'es' }, 'Idioma actualizado.')} className={`rounded-2xl p-4 text-sm font-black ${lang === 'es' ? 'bg-brand text-white' : 'bg-slate-100 text-slate-700'}`}>Español</button>
+              <button onClick={() => saveSettingsPatch({ preferredLanguage: 'en' }, 'Language updated.')} className={`rounded-2xl p-4 text-sm font-black ${lang === 'en' ? 'bg-brand text-white' : 'bg-slate-100 text-slate-700'}`}>English</button>
             </div>
-          </form>
-        </Card>
-        <Card>
-          <h2 className="text-lg font-black text-ink">{c.feelLink}</h2>
-          <form className="mt-4 grid gap-3" onSubmit={saveProfile}>
-            <Field label="Feel Great Link"><input className="input" value={profileLink} onChange={(event) => setProfileLink(event.target.value)} /></Field>
-            <div className="flex flex-wrap gap-2">
-              <PrimaryButton type="submit"><Check size={16} />{c.save}</PrimaryButton>
-              <SecondaryButton onClick={copyFeelGreatLink}><Copy size={16} />{c.copy}</SecondaryButton>
-              <SecondaryButton onClick={shareFeelGreatLink}><Share2 size={16} />{c.share}</SecondaryButton>
-              <SecondaryButton onClick={openFeelGreatLink}><ExternalLink size={16} />{c.open}</SecondaryButton>
-            </div>
-          </form>
-        </Card>
-        <Card>
-          <h2 className="text-lg font-black text-ink">{c.language}</h2>
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            <button onClick={() => saveSettingsPatch({ preferredLanguage: 'es' }, 'Idioma actualizado.')} className={`rounded-2xl p-4 text-sm font-black ${lang === 'es' ? 'bg-black text-white' : 'bg-slate-100 text-slate-700'}`}>Español</button>
-            <button onClick={() => saveSettingsPatch({ preferredLanguage: 'en' }, 'Language updated.')} className={`rounded-2xl p-4 text-sm font-black ${lang === 'en' ? 'bg-black text-white' : 'bg-slate-100 text-slate-700'}`}>English</button>
-          </div>
-        </Card>
-        <Card>
-          <h2 className="text-lg font-black text-ink">{lang === 'en' ? 'Technical backup' : 'Backup técnico'}</h2>
-          <p className="mt-1 text-sm text-slate-500">{lang === 'en' ? 'Local export for your own records.' : 'Exportación local para tus propios registros.'}</p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <SecondaryButton onClick={() => downloadFile(JSON.stringify({ app: 'difusion-local-privada', version: 1, exportedAt: todayIso(), contacts, lists, campaigns, queue, members, tasks, weeklyEvents, mediaAssets, settings }, null, 2), `backup-golden-team-${todayKey()}.json`, 'application/json')}><Download size={16} />Exportar backup</SecondaryButton>
-            <SecondaryButton onClick={closeSession}><LogOut size={16} />{c.logout}</SecondaryButton>
-          </div>
-        </Card>
+          </Card>
+        ) : null}
       </div>
     </div>
   );
@@ -991,36 +1095,50 @@ function App() {
     if (selectedList) return renderBroadcastList();
     return (
       <div className="grid gap-4">
-        <Header title={c.broadcast} subtitle={c.broadcastSub} />
-        <div className="grid gap-2 sm:grid-cols-3">
-          <PrimaryButton onClick={() => document.getElementById('new-list-name')?.focus()}><Plus size={17} />{c.newList}</PrimaryButton>
-          <SecondaryButton onClick={() => mediaInputRef.current?.click()}><Library size={17} />{c.library}</SecondaryButton>
-          <SecondaryButton onClick={() => { const pending = campaigns.find((campaign) => queue.some((item) => item.campaignId === campaign.id && ['Pendiente', 'Abierto'].includes(item.status))); if (pending?.id) { setActiveCampaignId(pending.id); setSelectedListId(pending.listIds[0] || null); } }}><Play size={17} />{c.continueQueue}</SecondaryButton>
-        </div>
-        <Card>
-          <form className="grid gap-3 sm:grid-cols-[1fr_auto]" onSubmit={createList}>
-            <Field label={lang === 'en' ? 'List name' : 'Nombre de la lista'}><input id="new-list-name" className="input" value={listName} onChange={(event) => setListName(event.target.value)} placeholder="LA Fitness" /></Field>
-            <PrimaryButton type="submit" className="self-end"><Plus size={17} />{c.newList}</PrimaryButton>
-          </form>
-        </Card>
-        <div className="grid gap-3">
-          {lists.map((list) => {
-            const stats = listStats(list);
-            return (
-              <button key={list.id} onClick={() => { setSelectedListId(list.id!); setMessageEs(list.lastMessageEs || ''); setMessageEn(list.lastMessageEn || ''); }} className="min-w-0 rounded-[1.4rem] border border-slate-100 bg-white p-4 text-left shadow-sm">
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h2 className="truncate text-lg font-black text-ink">{list.name}</h2>
-                    <p className="mt-1 text-sm text-slate-500">{stats.total} contactos · {stats.es} Español · {stats.en} English</p>
-                  </div>
-                  {stats.pending ? <Badge tone="warn">{stats.pending} pendientes</Badge> : <Badge>{stats.lastSent ? shortDate(stats.lastSent, lang) : 'Sin envío'}</Badge>}
-                </div>
-              </button>
-            );
-          })}
-          {!lists.length ? <Card><p className="text-sm text-slate-500">{lang === 'en' ? 'No lists yet. Create your first list when you are ready.' : 'Todavía no hay listas. Crea tu primera lista cuando estés listo.'}</p></Card> : null}
-        </div>
-        {renderMediaLibrary()}
+        <Header title={c.broadcast} subtitle={c.broadcastSub}>
+          <div className="grid grid-cols-2 gap-2 rounded-2xl bg-brandDark/60 p-1">
+            <button onClick={() => setBroadcastTab('lists')} className={`min-h-11 rounded-xl text-sm font-black ${broadcastTab === 'lists' ? 'bg-white text-brand' : 'text-white/80'}`}>{c.lists}</button>
+            <button onClick={() => setBroadcastTab('library')} className={`min-h-11 rounded-xl text-sm font-black ${broadcastTab === 'library' ? 'bg-white text-brand' : 'text-white/80'}`}>{c.library}</button>
+          </div>
+        </Header>
+        {broadcastTab === 'lists' ? (
+          <>
+            <div className="flex justify-end">
+              <PrimaryButton onClick={() => setNewListOpen(true)}><Plus size={17} />{c.newList}</PrimaryButton>
+            </div>
+            <div className="grid gap-3">
+              {lists.map((list) => {
+                const stats = listStats(list);
+                return (
+                  <button key={list.id} onClick={() => { setSelectedListId(list.id!); setMessageEs(list.lastMessageEs || ''); setMessageEn(list.lastMessageEn || ''); }} className="min-w-0 rounded-[1.4rem] border border-slate-200 bg-white p-4 text-left shadow-sm">
+                    <div className="flex min-w-0 items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h2 className="truncate text-lg font-black text-ink">{list.name}</h2>
+                        <p className="mt-1 text-sm text-slate-500">{stats.total} contactos · {stats.es} Español · {stats.en} English</p>
+                      </div>
+                      {stats.pending ? <Badge tone="warn">{stats.pending} pendientes</Badge> : <Badge>{stats.lastSent ? shortDate(stats.lastSent, lang) : (lang === 'en' ? 'No send' : 'Sin envío')}</Badge>}
+                    </div>
+                  </button>
+                );
+              })}
+              {!lists.length ? <Card><p className="text-sm text-slate-500">{lang === 'en' ? 'You do not have any lists yet.' : 'Todavía no tienes listas.'}</p></Card> : null}
+            </div>
+          </>
+        ) : renderMediaLibrary()}
+        {newListOpen ? (
+          <div className="fixed inset-0 z-50 grid place-items-end bg-black/40 p-4 sm:place-items-center">
+            <Card className="w-full max-w-md">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h2 className="text-lg font-black text-ink">{c.newList}</h2>
+                <IconButton label="Cerrar" onClick={() => setNewListOpen(false)}><X /></IconButton>
+              </div>
+              <form className="grid gap-3" onSubmit={createList}>
+                <Field label={lang === 'en' ? 'List name' : 'Nombre de la lista'}><input className="input" value={listName} onChange={(event) => setListName(event.target.value)} placeholder="LA Fitness" /></Field>
+                <PrimaryButton type="submit"><Plus size={17} />{c.newList}</PrimaryButton>
+              </form>
+            </Card>
+          </div>
+        ) : null}
       </div>
     );
   };
@@ -1038,7 +1156,7 @@ function App() {
         <div className="grid gap-2 sm:grid-cols-5">
           <PrimaryButton onClick={() => document.getElementById('broadcast-contact-name')?.focus()}><Plus size={17} />Añadir contacto</PrimaryButton>
           <SecondaryButton onClick={() => importFromDeviceContacts('broadcast')}><Phone size={17} />Teléfono</SecondaryButton>
-          <SecondaryButton onClick={() => mediaInputRef.current?.click()}><Library size={17} />{c.library}</SecondaryButton>
+          <SecondaryButton onClick={() => { setSelectedListId(null); setBroadcastTab('library'); }}><Library size={17} />{c.library}</SecondaryButton>
           <SecondaryButton onClick={() => createBroadcastQueue()}><Send size={17} />Comenzar envío</SecondaryButton>
           <SecondaryButton onClick={() => downloadFile(exportContactsCsv(listContacts), `${selectedList!.name}.csv`, 'text/csv')}><Download size={17} />CSV</SecondaryButton>
         </div>
@@ -1132,32 +1250,55 @@ function App() {
     <Card>
       <input ref={mediaInputRef} className="hidden" type="file" accept="image/*,video/*" onChange={handleMediaFile} />
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h2 className="text-lg font-black text-ink">{c.library}</h2><p className="text-sm text-slate-500">Imágenes y videos guardados localmente.</p></div>
-        <div className="flex gap-2"><input className="input w-40" value={assetName} onChange={(event) => setAssetName(event.target.value)} placeholder="Nombre" /><SecondaryButton onClick={() => mediaInputRef.current?.click()}><ImagePlus size={16} />Añadir</SecondaryButton></div>
+        <div>
+          <h2 className="text-lg font-black text-ink">{c.library}</h2>
+          <p className="text-sm text-slate-500">{settings.googleDriveConnection === 'connected' ? (settings.googleDriveAccount || (lang === 'en' ? 'Connected account' : 'Cuenta conectada')) : c.connectDriveTitle}</p>
+        </div>
+        {settings.googleDriveConnection === 'connected' ? <Badge tone="good">Google Drive</Badge> : <Badge tone="warn">{googleConfigured() ? (lang === 'en' ? 'Ready' : 'Listo') : c.drivePending}</Badge>}
       </div>
+      {settings.googleDriveConnection !== 'connected' ? (
+        <div className="mt-4 rounded-2xl bg-slate-50 p-4">
+          <p className="text-sm leading-relaxed text-slate-600">{googleConfigured() ? c.connectDriveTitle : `${c.drivePending}. ${driveConfigMissing(lang)}`}</p>
+          <PrimaryButton onClick={connectGoogleDrive} className="mt-4"><Cloud size={17} />{c.connectDrive}</PrimaryButton>
+        </div>
+      ) : (
+        <div className="mt-4 grid gap-3">
+          <div className="flex flex-wrap gap-2">
+            <PrimaryButton onClick={addFromDrive}><Cloud size={17} />{c.addFromDrive}</PrimaryButton>
+            <SecondaryButton onClick={addFromDrive}><Upload size={17} />{c.uploadToDrive}</SecondaryButton>
+            <SecondaryButton onClick={disconnectGoogleDrive}><LogOut size={17} />{c.disconnectDrive}</SecondaryButton>
+          </div>
+          <div className="grid grid-cols-3 gap-2 rounded-2xl bg-slate-100 p-1">
+            {(['all', 'photos', 'videos'] as DriveFilter[]).map((filter) => <button key={filter} onClick={() => setDriveFilter(filter)} className={`min-h-10 rounded-xl text-sm font-black ${driveFilter === filter ? 'bg-white text-brand shadow-sm' : 'text-slate-600'}`}>{filter === 'all' ? c.all : filter === 'photos' ? c.photos : c.videos}</button>)}
+          </div>
+        </div>
+      )}
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        {mediaAssets.map((asset) => (
+        {mediaAssets.filter((asset) => driveFilter === 'all' || (driveFilter === 'photos' && asset.kind === 'image') || (driveFilter === 'videos' && asset.kind === 'video')).map((asset) => (
           <article key={asset.id} className="min-w-0 rounded-2xl bg-slate-50 p-3">
-            {asset.kind === 'image' ? <img src={asset.dataUrl} alt="" className="h-32 w-full rounded-xl object-cover" /> : <div className="grid h-32 place-items-center rounded-xl bg-black text-white"><FileImage /><span className="text-xs">{asset.type}</span></div>}
+            {asset.kind === 'image' ? <img src={asset.driveThumbnail || asset.dataUrl} alt="" className="h-32 w-full rounded-xl object-cover" /> : <div className="grid h-32 place-items-center rounded-xl bg-brand text-white"><FileImage /><span className="text-xs">{asset.type}</span></div>}
             <div className="mt-3 flex min-w-0 items-center justify-between gap-2">
-              <span className="min-w-0"><strong className="block truncate text-sm text-ink">{asset.name}</strong><span className="text-xs text-slate-500">{Math.round(asset.size / 1024)} KB</span></span>
-              <IconButton label={c.delete} onClick={() => deleteMedia(asset.id)}><Trash2 size={16} /></IconButton>
+              <span className="min-w-0"><strong className="block truncate text-sm text-ink">{asset.name}</strong><span className="text-xs text-slate-500">{asset.source === 'google-drive' ? 'Google Drive' : `${Math.round(asset.size / 1024)} KB`}</span></span>
+              <div className="flex gap-2">
+                {asset.driveWebViewLink ? <IconButton label={c.open} onClick={() => window.open(asset.driveWebViewLink, '_blank', 'noopener,noreferrer')}><ExternalLink size={16} /></IconButton> : null}
+                <IconButton label={c.delete} onClick={() => deleteMedia(asset.id)}><Trash2 size={16} /></IconButton>
+              </div>
             </div>
           </article>
         ))}
-        {!mediaAssets.length ? <p className="text-sm text-slate-500">Sin media guardada.</p> : null}
+        {!mediaAssets.length ? <p className="text-sm text-slate-500">{c.noContent}</p> : null}
       </div>
     </Card>
   );
 
   const renderFollowUps = () => (
     <div className="grid gap-4">
-      <Header title={c.followUps} subtitle={c.followUpsSub} />
+      <Header title={c.followUps} subtitle={c.followUpsSub} action={<PrimaryButton onClick={() => importFromDeviceContacts('follow')} className="bg-white text-brand hover:bg-white/90"><Phone size={17} />{c.importContact}</PrimaryButton>} />
       <div className="grid gap-3 sm:grid-cols-4">
-        <Card><p className="text-xs font-bold text-slate-500">Personas activas</p><strong className="text-3xl">{activeFollowPeople.length}</strong></Card>
-        <Card><p className="text-xs font-bold text-slate-500">Hoy</p><strong className="text-3xl">{todayTasks.filter((task) => taskType(task) === 'Seguimiento').length}</strong></Card>
-        <Card><p className="text-xs font-bold text-slate-500">Vencidos</p><strong className="text-3xl">{overdueTasks.filter((task) => taskType(task) === 'Seguimiento').length}</strong></Card>
-        <Card><p className="text-xs font-bold text-slate-500">30 días</p><strong className="text-3xl">{completedFollowPeople.length}</strong></Card>
+        <Card><p className="text-xs font-bold text-slate-500">{lang === 'en' ? 'Active people' : 'Personas activas'}</p><strong className="text-3xl">{activeFollowPeople.length}</strong></Card>
+        <Card><p className="text-xs font-bold text-slate-500">{c.today}</p><strong className="text-3xl">{todayTasks.filter((task) => taskType(task) === 'Seguimiento').length}</strong></Card>
+        <Card><p className="text-xs font-bold text-slate-500">{lang === 'en' ? 'Overdue' : 'Vencidos'}</p><strong className="text-3xl">{overdueTasks.filter((task) => taskType(task) === 'Seguimiento').length}</strong></Card>
+        <Card><p className="text-xs font-bold text-slate-500">{lang === 'en' ? 'Completed 30 days' : 'Completaron 30 días'}</p><strong className="text-3xl">{completedFollowPeople.length}</strong></Card>
       </div>
       <Card>
         <form className="grid gap-3" onSubmit={saveFollowPerson}>
@@ -1177,11 +1318,15 @@ function App() {
         </form>
       </Card>
       <Card>
-        <h2 className="text-lg font-black text-ink">{c.importContacts}</h2>
+        <h2 className="text-lg font-black text-ink">{c.importContact}</h2>
         <div className="mt-3 grid gap-3">
-          <SecondaryButton onClick={() => importFromDeviceContacts('follow')}><Phone size={16} />Seleccionar desde teléfono</SecondaryButton>
-          <Field label="Pegar lista"><textarea className="input min-h-24" value={followImportText} onChange={(event) => setFollowImportText(event.target.value)} /></Field>
-          <SecondaryButton onClick={importFollowPaste}><Upload size={16} />Importar para configurar individualmente</SecondaryButton>
+          <SecondaryButton onClick={() => importFromDeviceContacts('follow')}><Phone size={16} />{lang === 'en' ? 'Select from phone' : 'Seleccionar desde teléfono'}</SecondaryButton>
+          <div className="grid grid-cols-2 gap-2">
+            <SecondaryButton onClick={() => setNotice(lang === 'en' ? 'VCF import is available by pasting exported contacts for now.' : 'Por ahora importa VCF pegando los contactos exportados.')}><Upload size={16} />VCF</SecondaryButton>
+            <SecondaryButton onClick={() => setNotice(lang === 'en' ? 'CSV can be pasted below with name and phone.' : 'Puedes pegar CSV abajo con nombre y teléfono.')}><Upload size={16} />CSV</SecondaryButton>
+          </div>
+          <Field label={lang === 'en' ? 'Paste contacts' : 'Pegar contactos'}><textarea className="input min-h-24" value={followImportText} onChange={(event) => setFollowImportText(event.target.value)} placeholder={lang === 'en' ? 'Maria 4075551234' : 'María 4075551234'} /></Field>
+          <SecondaryButton onClick={importFollowPaste}><Upload size={16} />{lang === 'en' ? 'Import to configure individually' : 'Importar para configurar individualmente'}</SecondaryButton>
         </div>
       </Card>
       <div className="grid gap-3">
@@ -1239,7 +1384,7 @@ function App() {
     return (
       <div className="grid gap-4">
         <Header title={c.tasks} subtitle={c.tasksSub} />
-        <div className="flex gap-2 overflow-x-auto pb-1">{taskGroups.map((group) => <button key={group} onClick={() => setTaskGroup(group)} className={`shrink-0 rounded-full px-4 py-2 text-sm font-black ${taskGroup === group ? 'bg-black text-white' : 'bg-white text-slate-600'}`}>{copy.es[group === 'Hoy' ? 'today' : group === 'Vencidas' ? 'overdue' : group === 'Próximas' ? 'upcoming' : 'completed'] || group}</button>)}</div>
+        <div className="flex gap-2 overflow-x-auto pb-1">{taskGroups.map((group) => <button key={group} onClick={() => setTaskGroup(group)} className={`shrink-0 rounded-full px-4 py-2 text-sm font-black ${taskGroup === group ? 'bg-brand text-white' : 'bg-white text-slate-600'}`}>{copy.es[group === 'Hoy' ? 'today' : group === 'Vencidas' ? 'overdue' : group === 'Próximas' ? 'upcoming' : 'completed'] || group}</button>)}</div>
         <div className="flex gap-2 overflow-x-auto pb-1">{taskFilters.map((filter) => <button key={filter} onClick={() => setTaskFilter(filter)} className={`shrink-0 rounded-full px-4 py-2 text-sm font-black ${taskFilter === filter ? 'bg-brand text-white' : 'bg-white text-slate-600'}`}>{filter}</button>)}</div>
         <div className="grid gap-3">
           {filtered.map((task) => (
@@ -1262,7 +1407,7 @@ function App() {
       <div><h2 className="text-xl font-black text-ink">{task.title}</h2><p className="text-sm text-slate-500">{task.contactName} · {task.phone} · {task.language || 'Español'}</p></div>
       <div className="rounded-2xl bg-slate-50 p-3"><p className="whitespace-pre-wrap text-sm text-slate-700">{task.message}</p>{task.meetingLink ? <button onClick={() => window.open(task.meetingLink, '_blank', 'noopener,noreferrer')} className="mt-3 inline-flex items-center gap-2 text-sm font-black text-brand"><ExternalLink size={16} />Zoom</button> : null}</div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {task.queueItemId ? <PrimaryButton onClick={() => { const item = queue.find((candidate) => candidate.id === task.queueItemId); if (item) { setActiveCampaignId(item.campaignId); setActive('difusion'); setSelectedTaskId(null); } }}><Play size={16} />Abrir cola</PrimaryButton> : null}
+        {task.queueItemId ? <PrimaryButton onClick={() => { const item = queue.find((candidate) => candidate.id === task.queueItemId); if (item) { setActiveCampaignId(item.campaignId); setActive('difusion'); setSelectedTaskId(null); } }}><Send size={16} />Abrir cola</PrimaryButton> : null}
         <PrimaryButton onClick={() => openWhatsAppFor(task)}><MessageCircle size={16} />WhatsApp</PrimaryButton>
         <SecondaryButton onClick={() => openSmsFor(task)}><Phone size={16} />SMS</SecondaryButton>
         <SecondaryButton onClick={() => copyMessage(task.message)}><Copy size={16} />Copiar</SecondaryButton>
@@ -1289,7 +1434,7 @@ function App() {
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-3 pb-[calc(env(safe-area-inset-bottom)+0.55rem)] pt-2 backdrop-blur">
         <div className="mx-auto grid max-w-2xl grid-cols-4 gap-2">
           {navItems.map((item) => (
-            <button key={item.id} onClick={() => setActive(item.id)} className={`relative flex min-h-[62px] min-w-0 flex-col items-center justify-center gap-1 rounded-2xl px-1 text-[0.68rem] font-black leading-tight transition ${active === item.id ? 'bg-black text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'}`}>
+            <button key={item.id} onClick={() => setActive(item.id)} className={`relative flex min-h-[62px] min-w-0 flex-col items-center justify-center gap-1 rounded-2xl px-1 text-[0.68rem] font-black leading-tight transition ${active === item.id ? 'bg-brand text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'}`}>
               {item.icon}
               <span className="max-w-full text-center">{item.label}</span>
               {item.id === 'tareas' && taskBadge ? <span className="absolute right-2 top-2 grid min-h-5 min-w-5 place-items-center rounded-full bg-gold px-1 text-[0.65rem] font-black text-black">{taskBadge}</span> : null}
