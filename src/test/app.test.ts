@@ -172,6 +172,16 @@ describe('cuenta, safe area y plantillas visuales', () => {
     expect(appSource).not.toContain('Abrir cola');
   });
 
+  it('mantiene la identidad visual negro, dorado y gris sin clases azules', () => {
+    const styles = readFileSync(join(process.cwd(), 'src/index.css'), 'utf8');
+    const tailwind = readFileSync(join(process.cwd(), 'tailwind.config.ts'), 'utf8');
+    const visualSource = `${appSource}\n${styles}\n${tailwind}`;
+    expect(visualSource).toContain('--color-brand: 5 5 5');
+    expect(visualSource).toContain('--color-brand-light: 201 162 39');
+    expect(visualSource).toContain('grid-cols-3 gap-2');
+    expect(visualSource).not.toMatch(/bg-(blue|sky)|text-(blue|sky)|border-(blue|sky)|#2563eb|#1d4ed8|14 39 71/);
+  });
+
   it('editor nuevo no muestra eliminar y el personalizado existente si puede eliminarse', () => {
     expect(appSource).toContain("isNew ? 'Guardar plantilla' : 'Guardar cambios'");
     expect(appSource).toContain('!isNew && !isBase && template');

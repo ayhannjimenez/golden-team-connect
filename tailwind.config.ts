@@ -10,11 +10,11 @@ export default {
         brand: 'rgb(var(--color-brand) / <alpha-value>)',
         brandDark: 'rgb(var(--color-brand-dark) / <alpha-value>)',
         brandLight: 'rgb(var(--color-brand-light) / <alpha-value>)',
-        gold: '#d6a53a',
-        goldDark: '#9d7626'
+        gold: '#c9a227',
+        goldDark: '#9c7a18'
       },
       boxShadow: {
-        soft: '0 18px 45px rgba(18, 58, 115, 0.10)'
+        soft: '0 18px 45px rgba(5, 5, 5, 0.10)'
       }
     }
   },

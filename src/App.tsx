@@ -268,7 +268,7 @@ function Field({ label, children, helper }: { label: string; children: ReactNode
 
 function PrimaryButton({ children, onClick, type = 'button', disabled = false, className = '' }: { children: ReactNode; onClick?: () => void; type?: 'button' | 'submit'; disabled?: boolean; className?: string }) {
   return (
-    <button type={type} onClick={onClick} disabled={disabled} className={`inline-flex min-h-12 min-w-0 items-center justify-center gap-2 rounded-2xl bg-brand px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-brandDark disabled:cursor-not-allowed disabled:opacity-45 ${className}`}>
+    <button type={type} onClick={onClick} disabled={disabled} className={`inline-flex min-h-12 min-w-0 items-center justify-center gap-2 rounded-2xl bg-brand px-5 py-3 text-sm font-black text-white shadow-[0_10px_24px_rgba(5,5,5,0.12)] transition hover:bg-brandDark disabled:cursor-not-allowed disabled:opacity-45 ${className}`}>
       {children}
     </button>
   );
@@ -291,7 +291,7 @@ function IconButton({ label, children, onClick, className = '' }: { label: strin
 }
 
 function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <section className={`min-w-0 rounded-[1.4rem] border border-slate-200 bg-white p-4 shadow-sm ${className}`}>{children}</section>;
+  return <section className={`min-w-0 rounded-[1.4rem] border border-[rgb(var(--color-border))] bg-white p-4 shadow-[0_10px_28px_rgba(5,5,5,0.055)] ${className}`}>{children}</section>;
 }
 
 function Header({ title, subtitle, action, children }: { title: string; subtitle: string; action?: ReactNode; children?: ReactNode }) {
@@ -316,7 +316,7 @@ function Header({ title, subtitle, action, children }: { title: string; subtitle
   );
 }
 
-function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'good' | 'warn' | 'bad' | 'blue' }) {
+function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'good' | 'warn' | 'bad' | 'accent' }) {
   const color =
     tone === 'good'
       ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
@@ -324,8 +324,8 @@ function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'ne
         ? 'border-gold/40 bg-gold/15 text-brand'
         : tone === 'bad'
           ? 'border-red-200 bg-red-50 text-red-800'
-          : tone === 'blue'
-            ? 'border-sky-200 bg-sky-50 text-sky-800'
+          : tone === 'accent'
+            ? 'border-gold/35 bg-[#f6f0dc] text-brand'
             : 'border-slate-200 bg-slate-50 text-slate-700';
   return <span className={`inline-flex min-w-0 items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-black ${color}`}>{children}</span>;
 }
@@ -1365,7 +1365,7 @@ function App() {
               <ExternalLink size={17} className="shrink-0 text-slate-400" />
             </button>
           ))}
-          <div className="flex min-h-[60px] min-w-0 items-center gap-2 rounded-2xl bg-sky-50 p-3 ring-1 ring-sky-100">
+          <div className="flex min-h-[60px] min-w-0 items-center gap-2 rounded-2xl bg-[#f6f0dc] p-3 ring-1 ring-[#e4d39a]">
             <button onClick={openFeelGreatLink} className="flex min-w-0 flex-1 items-center gap-3 text-left">
               <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-white text-brand shadow-sm"><Link2 size={19} /></span>
               <span className="min-w-0 flex-1"><strong className="block text-sm text-ink">Mi Feel Great Link</strong><span className="block truncate text-xs text-slate-500">{settings.feelGreatLink ? readableUrl(settings.feelGreatLink) : 'Sin configurar'}</span></span>
@@ -1385,7 +1385,7 @@ function App() {
         <strong className="block whitespace-normal break-words text-sm leading-tight text-ink">{template.internalTitle || template.name}</strong>
         <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
           <span>{templateDisplayTime(template, lang)}</span>
-          <Badge tone={template.templateType === 'custom' ? 'blue' : 'neutral'}>{template.templateType === 'custom' ? 'Personalizada' : 'Base'}</Badge>
+          <Badge tone={template.templateType === 'custom' ? 'accent' : 'warn'}>{template.templateType === 'custom' ? 'Personalizada' : 'Base'}</Badge>
           {template.templateType === 'custom' ? <Badge tone={template.active === false ? 'warn' : 'good'}>{template.active === false ? 'Inactiva' : 'Activa'}</Badge> : null}
         </span>
       </span>
@@ -1535,7 +1535,7 @@ function App() {
         {accountPanel === 'link' ? (
           <Card>
             <form className="grid gap-4" onSubmit={saveProfile}>
-              <div className="rounded-[1.4rem] bg-sky-50 p-4 ring-1 ring-sky-100">
+              <div className="rounded-[1.4rem] bg-[#f6f0dc] p-4 ring-1 ring-[#e4d39a]">
                 <h2 className="text-lg font-black text-ink">Mi Feel Great Link</h2>
                 <p className="mt-1 text-sm text-slate-600">Comparte tu enlace y facilita el acceso a tus clientes.</p>
                 <Field label="Feel Great Link"><input className="input mt-3 bg-white" value={profileLink} onChange={(event) => setProfileLink(event.target.value)} /></Field>
@@ -1872,7 +1872,7 @@ function App() {
       <button key={member.id} onClick={() => setSelectedMemberId(member.id!)} className="min-w-0 rounded-[1.4rem] border border-slate-100 bg-white p-4 text-left shadow-sm">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0"><h3 className="truncate text-lg font-black text-ink">{memberName(member)}</h3><p className="text-sm text-slate-500">{member.phone} · {member.language || 'Español'} · {member.preferredChannel}</p></div>
-          <Badge tone={member.programStatus === 'Completado' ? 'good' : member.programStatus === 'Pausado' ? 'warn' : 'blue'}>{member.programStatus === 'Completado' ? '100%' : member.programStatus === 'Pausado' ? 'Pausado' : `Día ${Math.min(day ?? 0, 30)} de 30`}</Badge>
+          <Badge tone={member.programStatus === 'Completado' ? 'good' : member.programStatus === 'Pausado' ? 'warn' : 'accent'}>{member.programStatus === 'Completado' ? '100%' : member.programStatus === 'Pausado' ? 'Pausado' : `Día ${Math.min(day ?? 0, 30)} de 30`}</Badge>
         </div>
         <div className="mt-3 h-2 rounded-full bg-slate-100"><div className="h-full rounded-full bg-gold" style={{ width: `${progress}%` }} /></div>
         <p className="mt-2 text-sm text-slate-500">{pending ? `${pending.title} · ${shortDate(pending.dueDate, lang)} ${pending.dueTime}` : 'Sin tareas pendientes'}</p>
@@ -1891,7 +1891,7 @@ function App() {
           <button onClick={() => setSelectedMemberId(null)} className="inline-flex w-fit items-center gap-2 text-sm font-black text-brand"><ChevronLeft size={18} />{c.followUps}</button>
           <Header title={memberName(member)} subtitle={`${member.phone} · ${member.language || 'Español'} · ${member.preferredChannel}`} />
           <Card>
-            <div className="flex items-center justify-between gap-3"><div><p className="text-sm text-slate-500">Progreso</p><h2 className="text-3xl font-black text-ink">{member.programStatus === 'Completado' ? '100%' : `${progress}%`}</h2></div><Badge tone="blue">Día {Math.min(day ?? 0, 30)} de 30</Badge></div>
+            <div className="flex items-center justify-between gap-3"><div><p className="text-sm text-slate-500">Progreso</p><h2 className="text-3xl font-black text-ink">{member.programStatus === 'Completado' ? '100%' : `${progress}%`}</h2></div><Badge tone="accent">Día {Math.min(day ?? 0, 30)} de 30</Badge></div>
             <div className="mt-3 h-3 rounded-full bg-slate-100"><div className="h-full rounded-full bg-gold" style={{ width: `${progress}%` }} /></div>
             <div className="mt-4 flex flex-wrap gap-2">
               <SecondaryButton onClick={() => regenerateFollowTasks(member)}><Bell size={16} />Regenerar tareas</SecondaryButton>
@@ -1913,7 +1913,7 @@ function App() {
   const renderTasks = () => {
     const source = taskGroup === 'Hoy' ? todayTasks : taskGroup === 'Vencidas' ? overdueTasks : taskGroup === 'Próximas' ? upcomingTasks : completedTasks;
     const taskGroupCards = [
-      { group: 'Hoy' as const, label: 'Hoy', count: todayTasks.length, tone: 'bg-blue-50 text-brand' },
+      { group: 'Hoy' as const, label: 'Hoy', count: todayTasks.length, tone: 'bg-[#f6f0dc] text-brand' },
       { group: 'Vencidas' as const, label: 'Vencidos', count: overdueTasks.length, tone: 'bg-red-50 text-red-700' },
       { group: 'Próximas' as const, label: 'Próximos', count: upcomingTasks.length, tone: 'bg-amber-50 text-amber-700' },
       { group: 'Completadas' as const, label: 'Completados', count: completedTasks.length, tone: 'bg-emerald-50 text-emerald-700' }
@@ -1922,7 +1922,7 @@ function App() {
       <div className="grid gap-4">
         <Header title={c.tasks} subtitle={c.tasksSub} />
         {notificationPermission !== 'granted' ? (
-          <Card className="border border-sky-100 bg-sky-50">
+          <Card className="border border-[#e4d39a] bg-[#f6f0dc]">
             <p className="text-sm font-bold text-ink">Activa las notificaciones para recibir avisos antes de tus mensajes.</p>
             <p className="mt-1 text-xs leading-relaxed text-slate-600">La app intentará avisarte 30 minutos antes mientras esté abierta. En iOS/PWA las notificaciones programadas sin backend no siempre se garantizan.</p>
             <SecondaryButton onClick={requestReminderNotifications} className="mt-3"><Bell size={16} />Activar notificaciones</SecondaryButton>
