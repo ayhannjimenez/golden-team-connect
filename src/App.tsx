@@ -30,7 +30,7 @@ import { db, defaultSettings, ensureSettings } from './db';
 import { isValidAccessCode, normalizeAccessCode } from './accessConfig';
 import type { AppLanguage, AppSettings, Campaign, Channel, Contact, ContactLanguage, ContactType, FollowUpTask, InternalList, MediaAsset, Member, MessageTemplate, QueueItem, QueueStatus, WeeklyEvent } from './types';
 import { exportContactsCsv, parseContactsCsv, csvRowToContact } from './utils/csv';
-import { buildFirst30DayTasks, buildLocalDueAt, currentProgramDay, defaultFollowUpTemplates, defaultWeeklyEvents, findNextMeeting, getDeviceTimezone, isTaskOpen, localDateKey, memberName, parsePastedProspects, resolveFollowUpMessage } from './utils/followup';
+import { buildFirst30DayTasks, buildLocalDueAt, buildTaskFromTemplate, currentProgramDay, defaultFollowUpTemplates, defaultWeeklyEvents, findNextMeeting, getDeviceTimezone, isTaskOpen, localDateKey, memberName, parsePastedProspects, resolveFollowUpMessage, templateDisplayTime } from './utils/followup';
 import { compressImage, fileToDataUrl, shareImage } from './utils/image';
 import { GOOGLE_DRIVE_SCOPE, clearDriveToken, driveFileToMediaAsset, driveTokenFromResponse, readDriveToken, storeDriveToken } from './utils/googleDrive';
 import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, cleanUnresolvedMessage, personalizeMessage } from './utils/messages';
@@ -312,10 +312,17 @@ function Card({ children, className = '' }: { children: ReactNode; className?: s
 
 function Header({ title, subtitle, action, children }: { title: string; subtitle: string; action?: ReactNode; children?: ReactNode }) {
   return (
-    <section className="-mx-4 -mt-[calc(env(safe-area-inset-top)+1rem)] min-w-0 rounded-b-[2rem] bg-brand px-4 pb-6 pt-[calc(env(safe-area-inset-top)+1.25rem)] text-white shadow-soft sm:-mx-6 sm:px-6">
+    <section
+      className="-mx-4 min-w-0 rounded-b-[2rem] bg-brand pb-6 text-white shadow-soft sm:-mx-6"
+      style={{
+        paddingTop: 'calc(env(safe-area-inset-top, 0px) + 20px)',
+        paddingLeft: 'calc(env(safe-area-inset-left, 0px) + 1rem)',
+        paddingRight: 'calc(env(safe-area-inset-right, 0px) + 1rem)'
+      }}
+    >
       <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-black tracking-normal">{title}</h1>
+        <div className="min-w-0 flex-1">
+          <h1 className="max-w-full whitespace-normal break-words text-[1.55rem] font-black leading-tight tracking-normal sm:text-2xl">{title}</h1>
           <p className="mt-1 max-w-xl text-sm leading-relaxed text-white/70">{subtitle}</p>
         </div>
         {action}
@@ -395,7 +402,11 @@ function App() {
     contactType: 'Miembro' as ContactType
   });
   const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
-  const [selectedTemplateKey, setSelectedTemplateKey] = useState<string | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<number | 'new' | null>(null);
+  const [templateForm, setTemplateForm] = useState({ name: '', day: 0, defaultTime: '10:00', active: true, includeInNewFollowUps: false });
+  const [templateApplyMode, setTemplateApplyMode] = useState<'library' | 'new' | 'selected'>('library');
+  const [templateSelectionId, setTemplateSelectionId] = useState<number | null>(null);
+  const [selectedTemplateMemberIds, setSelectedTemplateMemberIds] = useState<number[]>([]);
   const [templateDraft, setTemplateDraft] = useState('');
   const [selectedMeetingId, setSelectedMeetingId] = useState<number | 'new' | null>(null);
   const [meetingForm, setMeetingForm] = useState({ name: '', weekday: 1, eventTime: '19:00', link: '', audience: '', active: true });
@@ -406,6 +417,7 @@ function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
+  const templateTextRef = useRef<HTMLTextAreaElement | null>(null);
   const googleTokenClientRef = useRef<GoogleTokenClient | null>(null);
 
   const lang = settings.preferredLanguage || 'es';
@@ -426,8 +438,19 @@ function App() {
     for (const item of defaults) {
       const existing = existingTemplates.find((template) => template.key === item.key);
       if (!existing) await db.templates.add(item);
+      if (existing?.id) {
+        await db.templates.update(existing.id, {
+          templateType: existing.templateType || 'base',
+          active: existing.active ?? true,
+          includeInNewFollowUps: existing.includeInNewFollowUps ?? true,
+          originalMessage: existing.originalMessage || item.originalMessage,
+          availableVariables: existing.availableVariables || item.availableVariables
+        });
+      }
     }
     if (!(await db.weeklyEvents.count())) await db.weeklyEvents.bulkAdd(defaultWeeklyEvents.map((event) => ({ ...event, updatedAt: now.toISOString() })));
+    const currentSettings = await ensureSettings();
+    if (!currentSettings.appStoreLink) await db.settings.put({ ...currentSettings, appStoreLink: 'https://apps.apple.com/app/id6445913865' });
   }
 
   async function migrateActiveFollowUps() {
@@ -445,7 +468,8 @@ function App() {
         updatedAt: member.updatedAt || todayIso()
       };
       await db.members.update(member.id!, normalizedMember);
-      const nextTasks = buildFirst30DayTasks(normalizedMember, currentSettings, allTemplates, allEvents).filter((task) => !completedDays.has(task.sequenceDay || 0));
+      const baseTemplates = allTemplates.filter((template) => template.templateType !== 'custom');
+      const nextTasks = buildFirst30DayTasks(normalizedMember, currentSettings, baseTemplates, allEvents).filter((task) => !completedDays.has(task.sequenceDay || 0));
       const existingSourceKeys = new Set((await db.tasks.where('memberId').equals(member.id!).toArray()).map((task) => task.sourceKey).filter(Boolean));
       const missing = nextTasks.filter((task) => !existingSourceKeys.has(task.sourceKey));
       if (missing.length) await db.tasks.bulkAdd(missing);
@@ -588,7 +612,13 @@ function App() {
   }, [listContacts, listLanguageFilter]);
 
   const activeFollowPeople = useMemo(() => members.filter((member) => member.programStatus === 'Activo'), [members]);
+  const activeSelectableMembers = useMemo(() => activeFollowPeople.filter((member) => {
+    const day = currentProgramDay(member.protocolStartDate);
+    return day !== null && day <= 30;
+  }), [activeFollowPeople]);
   const completedFollowPeople = useMemo(() => members.filter((member) => member.programStatus === 'Completado'), [members]);
+  const baseTemplates = useMemo(() => templates.filter((template) => template.templateType !== 'custom' && template.key?.startsWith('followup-day-')).sort((a, b) => (a.day || 0) - (b.day || 0)), [templates]);
+  const customTemplates = useMemo(() => templates.filter((template) => template.templateType === 'custom').sort((a, b) => (a.day || 0) - (b.day || 0) || (a.name || '').localeCompare(b.name || '')), [templates]);
   const memberStatusById = useMemo(() => new Map(members.map((member) => [member.id, member.programStatus])), [members]);
   const actionTasks = useMemo(() => [...tasks, ...queueTasksFromQueue(queue)].sort((a, b) => `${a.dueDate} ${a.dueTime}`.localeCompare(`${b.dueDate} ${b.dueTime}`)), [queue, tasks]);
   const visibleOpenTasks = useMemo(() => actionTasks.filter((task) => isTaskOpen(task) && (!task.memberId || memberStatusById.get(task.memberId) !== 'Pausado' && memberStatusById.get(task.memberId) !== 'Completado')), [actionTasks, memberStatusById]);
@@ -1086,23 +1116,161 @@ function App() {
     await loadAll(lang === 'en' ? 'Task postponed.' : 'Tarea pospuesta.');
   }
 
-  async function saveTemplate(template: MessageTemplate) {
-    const updated = { ...template, body: templateDraft, message: templateDraft, updatedAt: todayIso(), templateVersion: (template.templateVersion || 1) + 1 };
-    await db.templates.put(updated);
-    const pending = await db.tasks.where('templateKey').equals(template.key || '').and((task) => isTaskOpen(task)).toArray();
-    await Promise.all(pending.map(async (task) => {
+  function openTemplateEditor(template?: MessageTemplate) {
+    if (!template) {
+      setSelectedTemplateId('new');
+      setTemplateForm({ name: '', day: 0, defaultTime: '10:00', active: true, includeInNewFollowUps: false });
+      setTemplateApplyMode('library');
+      setSelectedTemplateMemberIds([]);
+      setTemplateDraft('');
+      return;
+    }
+    setSelectedTemplateId(template.id || null);
+    setTemplateForm({
+      name: template.internalTitle || template.name,
+      day: template.day ?? 0,
+      defaultTime: template.defaultTime === 'now' ? '10:00' : template.defaultTime || '10:00',
+      active: template.active !== false,
+      includeInNewFollowUps: template.includeInNewFollowUps === true
+    });
+    setTemplateApplyMode(template.includeInNewFollowUps ? 'new' : 'library');
+    setSelectedTemplateMemberIds([]);
+    setTemplateDraft(template.message || template.body);
+  }
+
+  function closeTemplateEditor() {
+    setSelectedTemplateId(null);
+    setTemplateSelectionId(null);
+    setSelectedTemplateMemberIds([]);
+    setTemplateDraft('');
+  }
+
+  function insertTemplateVariable(variable: string) {
+    const textarea = templateTextRef.current;
+    if (!textarea) {
+      setTemplateDraft((current) => `${current}${variable}`);
+      return;
+    }
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const next = `${templateDraft.slice(0, start)}${variable}${templateDraft.slice(end)}`;
+    setTemplateDraft(next);
+    requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + variable.length, start + variable.length);
+    });
+  }
+
+  async function refreshFutureTemplateTasks(template: MessageTemplate, requireConfirmation: boolean) {
+    if (!template.id && !template.key) return;
+    const related = template.templateType === 'custom'
+      ? await db.tasks.where('templateId').equals(template.id || 0).and((task) => isTaskOpen(task)).toArray()
+      : await db.tasks.where('templateKey').equals(template.key || '').and((task) => isTaskOpen(task)).toArray();
+    if (!related.length) return;
+    if (requireConfirmation && !confirm('¿Actualizar recordatorios futuros pendientes relacionados con esta plantilla?')) return;
+    const events = await db.weeklyEvents.toArray();
+    await Promise.all(related.map(async (task) => {
       if (!task.id || !task.memberId) return;
       const member = await db.members.get(task.memberId);
       if (!member) return;
-      const meetingSnapshot = (task.sequenceDay === 14 || task.sequenceDay === 22)
-        ? findNextMeeting(await db.weeklyEvents.toArray(), task.dueAt || buildLocalDueAt(task.dueDate, task.dueTime), member.contactType)
-        : task.meetingSnapshot;
-      const resolvedMessage = cleanUnresolvedMessage(resolveFollowUpMessage(updated, member, settings, meetingSnapshot));
-      await db.tasks.update(task.id, { title: updated.internalTitle || updated.name, message: resolvedMessage, resolvedMessage, templateVersion: updated.templateVersion, meetingSnapshot, meetingLink: meetingSnapshot?.link, meetingId: meetingSnapshot?.id });
+      const nextTask = buildTaskFromTemplate(member, template, settings, events, new Date());
+      const meetingSnapshot = nextTask?.meetingSnapshot || task.meetingSnapshot;
+      const resolvedMessage = cleanUnresolvedMessage(resolveFollowUpMessage(template, member, settings, meetingSnapshot));
+      const nextDueIsPast = nextTask?.dueAt ? new Date(nextTask.dueAt).getTime() <= Date.now() : true;
+      await db.tasks.update(task.id, {
+        title: template.internalTitle || template.name,
+        message: resolvedMessage,
+        resolvedMessage,
+        templateVersion: template.templateVersion,
+        meetingSnapshot,
+        meetingLink: meetingSnapshot?.link,
+        meetingId: meetingSnapshot?.id,
+        ...(template.templateType === 'custom' && nextTask && !nextDueIsPast ? { dueDate: nextTask.dueDate, dueTime: nextTask.dueTime, dueAt: nextTask.dueAt, scheduledAt: nextTask.dueAt, sequenceDay: nextTask.sequenceDay, programDay: nextTask.programDay } : {})
+      });
     }));
-    setSelectedTemplateKey(null);
-    setTemplateDraft('');
-    await loadAll(lang === 'en' ? 'Template saved.' : 'Plantilla guardada.');
+  }
+
+  async function saveTemplateForm(event?: FormEvent) {
+    event?.preventDefault();
+    const existing = typeof selectedTemplateId === 'number' ? templates.find((template) => template.id === selectedTemplateId) : undefined;
+    const isNew = selectedTemplateId === 'new';
+    const isBase = Boolean(existing && existing.templateType !== 'custom');
+    if (!templateForm.name.trim()) return setNotice('Escribe el nombre de la plantilla.');
+    if (templateForm.day < 0 || templateForm.day > 30) return setNotice('Selecciona un día entre 0 y 30.');
+    if (!templateDraft.trim()) return setNotice('Escribe el mensaje de la plantilla.');
+    const now = todayIso();
+    const includeInNewFollowUps = isBase ? true : templateApplyMode === 'new' || templateForm.includeInNewFollowUps;
+    const payload: MessageTemplate = {
+      ...(existing || {}),
+      key: existing?.key || `custom-${Date.now()}`,
+      name: templateForm.name.trim(),
+      internalTitle: templateForm.name.trim(),
+      day: templateForm.day,
+      defaultTime: isBase && existing?.defaultTime === 'now' ? 'now' : templateForm.defaultTime,
+      body: templateDraft,
+      message: templateDraft,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+      templateVersion: (existing?.templateVersion || 0) + 1,
+      templateType: isBase ? 'base' : 'custom',
+      active: isBase ? true : templateForm.active,
+      includeInNewFollowUps,
+      originalMessage: existing?.originalMessage,
+      availableVariables: existing?.availableVariables || ['{{firstName}}', '{{feelGreatReferralLink}}', '{{meetingName}}', '{{meetingDateTime}}', '{{meetingLink}}', '{{appStoreLink}}', '{{googlePlayLink}}']
+    };
+    const savedId = await db.templates.put(payload);
+    const saved = { ...payload, id: typeof savedId === 'number' ? savedId : existing?.id };
+    await refreshFutureTemplateTasks(saved, !isBase && !isNew);
+    if (!isBase && templateApplyMode === 'selected' && saved.id) {
+      setTemplateSelectionId(saved.id);
+      setSelectedTemplateMemberIds([]);
+      await loadAll(isNew ? 'Plantilla creada.' : 'Plantilla actualizada.');
+      return;
+    }
+    closeTemplateEditor();
+    await loadAll(isNew ? 'Plantilla creada.' : 'Plantilla actualizada.');
+  }
+
+  async function addTemplateToSelectedMembers() {
+    if (!templateSelectionId) return;
+    const template = await db.templates.get(templateSelectionId);
+    if (!template) return setNotice('No se encontró la plantilla.');
+    if (!selectedTemplateMemberIds.length) return setNotice('Selecciona al menos una persona.');
+    const selectedMembers = activeSelectableMembers.filter((member) => member.id && selectedTemplateMemberIds.includes(member.id));
+    let added = 0;
+    let skipped = 0;
+    await db.transaction('rw', [db.tasks], async () => {
+      for (const member of selectedMembers) {
+        const task = buildTaskFromTemplate(member, template, settings, weeklyEvents, new Date(), { skipPast: true });
+        if (!task?.sourceKey) {
+          skipped += 1;
+          continue;
+        }
+        const duplicate = await db.tasks.where('sourceKey').equals(task.sourceKey).first();
+        if (duplicate) {
+          skipped += 1;
+          continue;
+        }
+        await db.tasks.add(task);
+        added += 1;
+      }
+    });
+    const message = `Plantilla añadida a ${added} personas. ${skipped} personas fueron omitidas porque ese día ya pasó o ya existía.`;
+    closeTemplateEditor();
+    await loadAll(message);
+  }
+
+  async function deleteCustomTemplate(template: MessageTemplate) {
+    if (!template.id || template.templateType !== 'custom') return;
+    if (!confirm('¿Eliminar esta plantilla?\n\nSe eliminará de la biblioteca y se cancelarán sus recordatorios futuros pendientes. Los mensajes ya completados permanecerán en el historial.')) return;
+    const now = Date.now();
+    await db.transaction('rw', [db.templates, db.tasks], async () => {
+      await db.templates.delete(template.id!);
+      const related = await db.tasks.where('templateId').equals(template.id!).and((task) => isTaskOpen(task) && new Date(task.dueAt || buildLocalDueAt(task.dueDate, task.dueTime)).getTime() >= now).toArray();
+      await Promise.all(related.map((task) => task.id ? db.tasks.update(task.id, { status: 'Cancelada' }) : Promise.resolve()));
+    });
+    closeTemplateEditor();
+    await loadAll('Plantilla eliminada.');
   }
 
   async function restoreTemplate(template: MessageTemplate) {
@@ -1229,34 +1397,140 @@ function App() {
     );
   };
 
+  const renderTemplateRow = (template: MessageTemplate) => (
+    <button key={template.id || template.key} onClick={() => openTemplateEditor(template)} className="flex min-h-[76px] w-full min-w-0 items-center gap-3 rounded-2xl px-3 text-left transition hover:bg-slate-50">
+      <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-slate-100 text-sm font-black text-brand">D{template.day ?? 0}</span>
+      <span className="min-w-0 flex-1">
+        <strong className="block whitespace-normal break-words text-sm leading-tight text-ink">{template.internalTitle || template.name}</strong>
+        <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+          <span>{templateDisplayTime(template, lang)}</span>
+          <Badge tone={template.templateType === 'custom' ? 'blue' : 'neutral'}>{template.templateType === 'custom' ? 'Personalizada' : 'Base'}</Badge>
+          {template.templateType === 'custom' ? <Badge tone={template.active === false ? 'warn' : 'good'}>{template.active === false ? 'Inactiva' : 'Activa'}</Badge> : null}
+        </span>
+      </span>
+      <ChevronRight className="shrink-0 text-slate-400" />
+    </button>
+  );
+
+  const renderTemplateSelection = () => {
+    const allSelected = activeSelectableMembers.length > 0 && activeSelectableMembers.every((member) => member.id && selectedTemplateMemberIds.includes(member.id));
+    return (
+      <Card>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-black text-ink">Seleccionar personas</h2>
+            <p className="text-sm text-slate-500">Solo seguimientos activos dentro de sus primeros 30 días.</p>
+          </div>
+          <IconButton label="Cerrar" onClick={() => setTemplateSelectionId(null)}><X /></IconButton>
+        </div>
+        {activeSelectableMembers.length ? (
+          <div className="grid gap-2">
+            <label className="flex min-h-12 items-center gap-3 rounded-2xl bg-slate-50 p-3 text-sm font-black text-ink">
+              <input type="checkbox" checked={allSelected} onChange={(event) => setSelectedTemplateMemberIds(event.target.checked ? activeSelectableMembers.map((member) => member.id!).filter(Boolean) : [])} />
+              Seleccionar todas
+            </label>
+            {activeSelectableMembers.map((member) => {
+              const day = currentProgramDay(member.protocolStartDate) ?? 0;
+              return (
+                <label key={member.id} className="flex min-h-[72px] min-w-0 items-center gap-3 rounded-2xl bg-slate-50 p-3">
+                  <input type="checkbox" checked={Boolean(member.id && selectedTemplateMemberIds.includes(member.id))} onChange={(event) => setSelectedTemplateMemberIds((current) => event.target.checked ? [...new Set([...current, member.id!])] : current.filter((id) => id !== member.id))} />
+                  <span className="min-w-0 flex-1"><strong className="block truncate text-sm text-ink">{memberName(member)}</strong><span className="text-xs text-slate-500">Día {Math.min(day, 30)} · Inicio {shortDate(member.protocolStartDate || '', lang)}</span></span>
+                </label>
+              );
+            })}
+            <PrimaryButton onClick={addTemplateToSelectedMembers}><Plus size={17} />Añadir mensaje a seleccionados</PrimaryButton>
+          </div>
+        ) : <p className="text-sm text-slate-500">No hay personas activas dentro de sus primeros 30 días.</p>}
+      </Card>
+    );
+  };
+
+  const renderTemplateEditor = () => {
+    const template = typeof selectedTemplateId === 'number' ? templates.find((item) => item.id === selectedTemplateId) : undefined;
+    const isNew = selectedTemplateId === 'new';
+    const isBase = Boolean(template && template.templateType !== 'custom');
+    if (templateSelectionId) return renderTemplateSelection();
+    return (
+      <Card>
+        <form className="grid gap-4" onSubmit={saveTemplateForm}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-black text-ink">{isNew ? 'Nueva plantilla' : (template?.internalTitle || template?.name || 'Plantilla')}</h2>
+              <p className="text-sm text-slate-500">{isBase ? 'Plantilla base' : 'Plantilla personalizada'}</p>
+            </div>
+            <IconButton label="Cerrar" onClick={closeTemplateEditor}><X /></IconButton>
+          </div>
+          <Field label="Nombre de la plantilla"><input className="input" value={templateForm.name} onChange={(event) => setTemplateForm((current) => ({ ...current, name: event.target.value }))} /></Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Día dentro del programa">
+              <select className="input" value={templateForm.day} disabled={isBase} onChange={(event) => setTemplateForm((current) => ({ ...current, day: Number(event.target.value) }))}>
+                {Array.from({ length: 31 }, (_, day) => <option key={day} value={day}>Día {day}</option>)}
+              </select>
+            </Field>
+            <Field label="Hora"><input className="input" type="time" value={templateForm.defaultTime} onChange={(event) => setTemplateForm((current) => ({ ...current, defaultTime: event.target.value }))} /></Field>
+          </div>
+          {!isBase ? (
+            <div className="grid gap-2">
+              <label className="flex min-h-12 items-center gap-3 rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700"><input type="checkbox" checked={templateForm.active} onChange={(event) => setTemplateForm((current) => ({ ...current, active: event.target.checked }))} />Activa</label>
+              <Field label="Aplicación de la plantilla">
+                <select className="input" value={templateApplyMode} onChange={(event) => setTemplateApplyMode(event.target.value as 'library' | 'new' | 'selected')}>
+                  <option value="library">Guardar solamente como plantilla</option>
+                  <option value="new">Añadir a todos los seguimientos nuevos</option>
+                  <option value="selected">Añadir a seguimientos activos seleccionados</option>
+                </select>
+              </Field>
+            </div>
+          ) : null}
+          <Field label="Mensaje">
+            <textarea ref={templateTextRef} className="input min-h-80" value={templateDraft} onChange={(event) => setTemplateDraft(event.target.value)} />
+          </Field>
+          <div className="grid gap-2 rounded-2xl bg-slate-50 p-3">
+            <p className="text-xs font-black uppercase text-slate-500">Insertar variable</p>
+            <div className="flex flex-wrap gap-2">
+              {['{{firstName}}', '{{feelGreatReferralLink}}', '{{meetingName}}', '{{meetingDateTime}}', '{{meetingLink}}', '{{appStoreLink}}', '{{googlePlayLink}}'].map((variable) => (
+                <SecondaryButton key={variable} onClick={() => insertTemplateVariable(variable)} className="min-h-10 px-3 py-2 text-xs">{variable}</SecondaryButton>
+              ))}
+            </div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <PrimaryButton type="submit"><Check size={16} />{isNew ? 'Guardar plantilla' : 'Guardar cambios'}</PrimaryButton>
+            <SecondaryButton onClick={closeTemplateEditor}><X size={16} />Cancelar</SecondaryButton>
+            {isBase && template ? <SecondaryButton onClick={() => restoreTemplate(template)}><Bell size={16} />Restaurar original</SecondaryButton> : null}
+            {!isNew && !isBase && template ? <SecondaryButton onClick={() => deleteCustomTemplate(template)} className="text-red-700"><Trash2 size={16} />Eliminar plantilla</SecondaryButton> : null}
+          </div>
+        </form>
+      </Card>
+    );
+  };
+
   const renderAccount = () => (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-soft pb-6">
       <div className="mx-auto grid max-w-2xl gap-4 px-4 sm:px-6">
         <Header
           title={accountPanel ? (accountPanel === 'profile' ? c.profileInfo : accountPanel === 'link' ? c.feelLink : accountPanel === 'templates' ? 'Plantillas de mensajes' : accountPanel === 'system' ? 'Sistema y reuniones' : c.language) : c.account}
           subtitle={accountPanel ? displayName(settings) : ''}
-          action={settings.profilePhoto ? <img src={settings.profilePhoto} className="h-16 w-16 rounded-full object-cover ring-2 ring-white/20" alt="" /> : <div className="grid h-16 w-16 place-items-center rounded-full bg-white/10 text-xl font-black ring-2 ring-white/20">{initials(displayName(settings))}</div>}
+          action={settings.profilePhoto ? <img src={settings.profilePhoto} className="h-14 w-14 shrink-0 rounded-full object-cover ring-2 ring-white/20" alt="" /> : <div className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-white/10 text-xl font-black ring-2 ring-white/20">{initials(displayName(settings))}</div>}
         >
-          <button onClick={() => accountPanel ? setAccountPanel(null) : setAccountOpen(false)} className="inline-flex min-h-11 items-center gap-2 rounded-2xl bg-white/10 px-3 text-sm font-black text-white"><ChevronLeft size={18} />{accountPanel ? c.account : (lang === 'en' ? 'Back' : 'Atrás')}</button>
+          <button onClick={() => accountPanel ? (closeTemplateEditor(), setAccountPanel(null)) : setAccountOpen(false)} className="inline-flex min-h-12 min-w-12 items-center gap-2 rounded-2xl bg-white/10 px-4 text-sm font-black text-white"><ChevronLeft size={18} />{accountPanel ? c.account : (lang === 'en' ? 'Back' : 'Atrás')}</button>
         </Header>
         {!accountPanel ? (
           <Card className="p-2">
             {[
               { id: 'profile' as const, icon: <Camera size={20} />, title: c.profileInfo, value: displayName(settings) },
               { id: 'link' as const, icon: <ExternalLink size={20} />, title: c.feelLink, value: settings.feelGreatLink ? readableUrl(settings.feelGreatLink) : (lang === 'en' ? 'Not set' : 'Sin configurar') },
-              { id: 'templates' as const, icon: <MessageCircle size={20} />, title: 'Plantillas de mensajes', value: `${templates.filter((template) => template.key?.startsWith('followup-day-')).length} plantillas` },
+              { id: 'templates' as const, icon: <MessageCircle size={20} />, title: 'Plantillas de mensajes', value: `${baseTemplates.length} base · ${customTemplates.length} personalizadas` },
               { id: 'system' as const, icon: <Bell size={20} />, title: 'Sistema y reuniones', value: `${weeklyEvents.length} reuniones` },
               { id: 'language' as const, icon: <GlobeIcon />, title: c.language, value: lang === 'en' ? 'English' : 'Español' }
             ].map((row) => (
-              <button key={row.id} onClick={() => setAccountPanel(row.id)} className="flex min-h-16 w-full min-w-0 items-center gap-3 rounded-2xl px-3 text-left hover:bg-slate-50">
-                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-slate-100 text-brand">{row.icon}</span>
-                <span className="min-w-0 flex-1"><strong className="block text-sm text-ink">{row.title}</strong><span className="block truncate text-xs text-slate-500">{row.value}</span></span>
+              <button key={row.id} onClick={() => setAccountPanel(row.id)} className="flex min-h-[72px] w-full min-w-0 items-center gap-3 rounded-2xl px-3 text-left transition hover:bg-slate-50">
+                <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-slate-100 text-brand">{row.icon}</span>
+                <span className="min-w-0 flex-1"><strong className="block text-base text-ink">{row.title}</strong><span className="block truncate text-sm text-slate-500">{row.value}</span></span>
                 <ChevronRight className="shrink-0 text-slate-400" />
               </button>
             ))}
-            <button onClick={closeSession} className="flex min-h-16 w-full min-w-0 items-center gap-3 rounded-2xl px-3 text-left hover:bg-slate-50">
-              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-slate-100 text-brand"><LogOut size={20} /></span>
-              <span className="min-w-0 flex-1"><strong className="block text-sm text-ink">{c.logout}</strong><span className="block truncate text-xs text-slate-500">{lang === 'en' ? 'Keeps all local data' : 'Conserva todos los datos locales'}</span></span>
+            <button onClick={closeSession} className="flex min-h-[72px] w-full min-w-0 items-center gap-3 rounded-2xl px-3 text-left transition hover:bg-slate-50">
+              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-slate-100 text-brand"><LogOut size={20} /></span>
+              <span className="min-w-0 flex-1"><strong className="block text-base text-ink">{c.logout}</strong><span className="block truncate text-sm text-slate-500">{lang === 'en' ? 'Keeps all local data' : 'Conserva todos los datos locales'}</span></span>
               <ChevronRight className="shrink-0 text-slate-400" />
             </button>
           </Card>
@@ -1292,42 +1566,27 @@ function App() {
         ) : null}
         {accountPanel === 'templates' ? (
           <div className="grid gap-3">
+            {selectedTemplateId || templateSelectionId ? renderTemplateEditor() : (
+              <>
             <Card>
               <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="App Store Link"><input className="input" value={settings.appStoreLink || ''} onChange={(event) => saveSettingsPatch({ appStoreLink: event.target.value }, 'Link actualizado.')} placeholder="Pendiente" /></Field>
+                <Field label="App Store Link"><input className="input" value={settings.appStoreLink || 'https://apps.apple.com/app/id6445913865'} onChange={(event) => saveSettingsPatch({ appStoreLink: event.target.value }, 'Link actualizado.')} placeholder="https://apps.apple.com/app/id6445913865" /></Field>
                 <Field label="Google Play Link"><input className="input" value={settings.googlePlayLink || ''} onChange={(event) => saveSettingsPatch({ googlePlayLink: event.target.value }, 'Link actualizado.')} placeholder="Pendiente" /></Field>
               </div>
               {(!settings.appStoreLink || !settings.googlePlayLink) ? <p className="mt-3 text-sm text-amber-700">Faltan enlaces oficiales de la aplicación. Las líneas vacías se eliminarán del mensaje enviado.</p> : null}
             </Card>
-            {!selectedTemplateKey ? (
+            <Card className="p-2">
+              <div className="px-2 pb-2 pt-1"><h2 className="text-lg font-black text-ink">Programa base de 30 días</h2></div>
+              {baseTemplates.map((template) => renderTemplateRow(template))}
+            </Card>
+            <PrimaryButton onClick={() => openTemplateEditor()} className="w-full"><Plus size={17} />Crear nueva plantilla</PrimaryButton>
+            {customTemplates.length ? (
               <Card className="p-2">
-                {templates.filter((template) => template.key?.startsWith('followup-day-')).sort((a, b) => (a.day || 0) - (b.day || 0)).map((template) => (
-                  <button key={template.key} onClick={() => { setSelectedTemplateKey(template.key || null); setTemplateDraft(template.message || template.body); }} className="flex min-h-16 w-full min-w-0 items-center gap-3 rounded-2xl px-3 text-left hover:bg-slate-50">
-                    <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-slate-100 text-sm font-black text-brand">D{template.day}</span>
-                    <span className="min-w-0 flex-1"><strong className="block text-sm text-ink">{template.internalTitle || template.name}</strong><span className="block truncate text-xs text-slate-500">{template.defaultTime === 'now' ? 'Inmediato' : template.defaultTime}</span></span>
-                    <ChevronRight className="shrink-0 text-slate-400" />
-                  </button>
-                ))}
+                <div className="px-2 pb-2 pt-1"><h2 className="text-lg font-black text-ink">Plantillas personalizadas</h2></div>
+                {customTemplates.map((template) => renderTemplateRow(template))}
               </Card>
-            ) : (
-              (() => {
-                const template = templates.find((item) => item.key === selectedTemplateKey);
-                if (!template) return null;
-                return (
-                  <Card>
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div><h2 className="text-lg font-black text-ink">{template.internalTitle || template.name}</h2><p className="text-sm text-slate-500">Día {template.day} · {template.defaultTime === 'now' ? 'Inmediato' : template.defaultTime}</p></div>
-                      <IconButton label="Cerrar" onClick={() => setSelectedTemplateKey(null)}><X /></IconButton>
-                    </div>
-                    <Field label="Mensaje"><textarea className="input min-h-72" value={templateDraft} onChange={(event) => setTemplateDraft(event.target.value)} /></Field>
-                    <p className="mt-3 text-xs text-slate-500">Variables: {(template.availableVariables || []).join(', ')}</p>
-                    <div className="mt-4 grid grid-cols-2 gap-2">
-                      <PrimaryButton onClick={() => saveTemplate(template)}><Check size={16} />Guardar</PrimaryButton>
-                      <SecondaryButton onClick={() => restoreTemplate(template)}><Bell size={16} />Restaurar original</SecondaryButton>
-                    </div>
-                  </Card>
-                );
-              })()
+            ) : null}
+              </>
             )}
           </div>
         ) : null}

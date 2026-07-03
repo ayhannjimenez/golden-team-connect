@@ -138,7 +138,10 @@ export function defaultFollowUpTemplates(now = new Date()): MessageTemplate[] {
     availableVariables: followUpVariables,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
-    templateVersion: 1
+    templateVersion: 1,
+    templateType: 'base',
+    active: true,
+    includeInNewFollowUps: true
   }));
 }
 
@@ -286,42 +289,82 @@ export function resolveFollowUpMessage(template: MessageTemplate | FollowUpStep,
   });
 }
 
+export function templateDisplayTime(template: Pick<MessageTemplate, 'defaultTime'>, language: AppSettings['preferredLanguage'] = 'es'): string {
+  const time = template.defaultTime || '10:00';
+  if (time === 'now') return language === 'en' ? 'Immediate' : 'Inmediato';
+  const [hour, minute] = time.split(':').map(Number);
+  const date = new Date(2026, 0, 1, hour || 0, minute || 0);
+  return date.toLocaleTimeString(language === 'en' ? 'en-US' : 'es-US', { hour: 'numeric', minute: '2-digit' }).replace('a. m.', 'a. m.').replace('p. m.', 'p. m.');
+}
+
+export function customTemplateSourceKey(member: Pick<Member, 'id' | 'protocolStartDate'>, template: Pick<MessageTemplate, 'id' | 'key' | 'day'>): string {
+  return `member:${member.id}:first30:custom:${template.id || template.key}:${member.protocolStartDate}`;
+}
+
+export function buildTaskFromTemplate(member: Member, template: MessageTemplate, settings: Partial<AppSettings> = {}, events: WeeklyEvent[] = defaultWeeklyEvents, now = new Date(), options: { skipPast?: boolean; baseDayZeroNow?: boolean } = {}): FollowUpTask | null {
+  if (!member.id || !member.protocolStartDate) return null;
+  const day = template.day ?? 0;
+  if (day < 0 || day > 30) return null;
+  const isCustom = template.templateType === 'custom';
+  const dueDate = options.baseDayZeroNow && !isCustom && day === 0 ? localDateKey(now) : addCalendarDays(member.protocolStartDate, day);
+  const rawTime = template.defaultTime || '10:00';
+  const dueTime = rawTime === 'now' ? localTimeKey(now) : rawTime;
+  const dueAt = buildLocalDueAt(dueDate, dueTime);
+  if (options.skipPast && new Date(dueAt).getTime() <= now.getTime()) return null;
+  const body = template.message || template.body || '';
+  const meetingSnapshot = day === 14 || day === 22 || body.includes('{{meeting')
+    ? findNextMeeting(events, dueAt, member.contactType)
+    : undefined;
+  const resolvedMessage = cleanUnresolvedMessage(resolveFollowUpMessage(template, member, settings, meetingSnapshot));
+  return {
+    memberId: member.id,
+    kind: 'Seguimiento',
+    program: FIRST_30_DAYS_PROGRAM,
+    title: template.internalTitle || template.name,
+    contactName: memberName(member),
+    phone: member.phone,
+    channel: member.preferredChannel,
+    language: member.language || 'Español',
+    dueDate,
+    dueTime,
+    dueAt,
+    scheduledAt: dueAt,
+    reminderMinutes: 30,
+    programDay: day,
+    sequenceDay: day,
+    templateKey: template.key,
+    templateId: template.id,
+    templateType: isCustom ? 'custom' : 'base',
+    templateVersion: template.templateVersion || 1,
+    message: resolvedMessage,
+    resolvedMessage,
+    status: 'Pendiente',
+    createdAt: now.toISOString(),
+    source: isCustom ? 'custom' : 'base',
+    sourceKey: isCustom ? customTemplateSourceKey(member, template) : `member:${member.id}:first30:${day}`,
+    meetingId: meetingSnapshot?.id,
+    meetingSnapshot,
+    meetingLink: meetingSnapshot?.link
+  };
+}
+
 export function buildFirst30DayTasks(member: Member, settingsOrLink: Partial<AppSettings> | string = {}, templates: MessageTemplate[] = defaultFollowUpTemplates(), events: WeeklyEvent[] = defaultWeeklyEvents, now = new Date()): FollowUpTask[] {
   if (!member.id || !member.protocolStartDate) return [];
   const settings = typeof settingsOrLink === 'string' ? { feelGreatLink: settingsOrLink } : settingsOrLink;
-  return first30DaySteps.map((step) => {
-    const template = templates.find((item) => item.key === step.key) || defaultFollowUpTemplates().find((item) => item.key === step.key)!;
-    const dueDate = step.day === 0 ? localDateKey(now) : addCalendarDays(member.protocolStartDate!, step.day);
-    const dueTime = step.day === 0 ? localTimeKey(now) : template.defaultTime || step.defaultTime;
-    const dueAt = buildLocalDueAt(dueDate, dueTime);
-    const meetingSnapshot = step.day === 14 || step.day === 22 ? findNextMeeting(events, dueAt, member.contactType) : undefined;
-    const resolvedMessage = cleanUnresolvedMessage(resolveFollowUpMessage(template, member, settings, meetingSnapshot));
-    return {
-      memberId: member.id,
-      kind: 'Seguimiento',
-      program: FIRST_30_DAYS_PROGRAM,
-      title: template.internalTitle || template.name || step.title,
-      contactName: memberName(member),
-      phone: member.phone,
-      channel: member.preferredChannel,
-      language: member.language || 'Español',
-      dueDate,
-      dueTime,
-      dueAt,
-      reminderMinutes: 30,
-      programDay: step.day,
-      sequenceDay: step.day,
-      templateKey: step.key,
-      templateVersion: template.templateVersion || 1,
-      message: resolvedMessage,
-      resolvedMessage,
-      status: 'Pendiente',
-      createdAt: now.toISOString(),
-      sourceKey: `member:${member.id}:first30:${step.day}`,
-      meetingId: meetingSnapshot?.id,
-      meetingSnapshot,
-      meetingLink: meetingSnapshot?.link
-    };
+  const defaults = defaultFollowUpTemplates(now);
+  const baseTasks = first30DaySteps
+    .map((step) => templates.find((item) => item.key === step.key && item.templateType !== 'custom') || defaults.find((item) => item.key === step.key)!)
+    .map((template) => buildTaskFromTemplate(member, template, settings, events, now, { baseDayZeroNow: true }))
+    .filter((task): task is FollowUpTask => Boolean(task));
+  const customTasks = templates
+    .filter((template) => template.templateType === 'custom' && template.active !== false && template.includeInNewFollowUps === true)
+    .map((template) => buildTaskFromTemplate(member, template, settings, events, now))
+    .filter((task): task is FollowUpTask => Boolean(task));
+  const seen = new Set<string>();
+  return [...baseTasks, ...customTasks].filter((task) => {
+    if (!task.sourceKey || seen.has(task.sourceKey)) return false;
+    seen.add(task.sourceKey);
+    return true;
   });
 }
 

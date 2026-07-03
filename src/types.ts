@@ -69,6 +69,8 @@ export interface FollowUpTask {
   programDay?: number;
   sequenceDay?: number;
   templateKey?: string;
+  templateId?: number;
+  templateType?: 'base' | 'custom';
   templateVersion?: number;
   message: string;
   resolvedMessage?: string;
@@ -81,6 +83,8 @@ export interface FollowUpTask {
   notes?: string;
   createdAt: string;
   sourceKey?: string;
+  source?: 'base' | 'custom';
+  scheduledAt?: string;
   meetingLink?: string;
   meetingId?: number;
   meetingSnapshot?: MeetingSnapshot;
@@ -149,6 +153,9 @@ export interface MessageTemplate {
   availableVariables?: string[];
   updatedAt?: string;
   templateVersion?: number;
+  templateType?: 'base' | 'custom';
+  active?: boolean;
+  includeInNewFollowUps?: boolean;
 }
 
 export interface CampaignImage {

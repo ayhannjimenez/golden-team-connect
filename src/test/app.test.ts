@@ -5,8 +5,9 @@ import type { Contact, MessageTemplate, QueueItem } from '../types';
 import { GOLDEN_TEAM_ACCESS_CODE, isValidAccessCode, normalizeAccessCode } from '../accessConfig';
 import { validateBackup } from '../utils/backup';
 import { exportContactsCsv, parseContactsCsv } from '../utils/csv';
+import { defaultSettings } from '../db';
 import { GOOGLE_DRIVE_SCOPE, clearDriveToken, driveFileToMediaAsset, driveTokenFromResponse, readDriveToken, storeDriveToken } from '../utils/googleDrive';
-import { addCalendarDays, buildFirst30DayTasks, buildRenewalTask, currentProgramDay, defaultFollowUpTemplates, defaultWeeklyEvents, findNextMeeting, isBusinessEligible, isTaskOpen, localDateKey, parsePastedProspects, renewalMessageForPurchaseType, resolveFollowUpMessage } from '../utils/followup';
+import { addCalendarDays, buildFirst30DayTasks, buildRenewalTask, buildTaskFromTemplate, currentProgramDay, defaultFollowUpTemplates, defaultWeeklyEvents, findNextMeeting, isBusinessEligible, isTaskOpen, localDateKey, parsePastedProspects, renewalMessageForPurchaseType, resolveFollowUpMessage, templateDisplayTime } from '../utils/followup';
 import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, cleanUnresolvedMessage, messageNeedsFeelGreatLink, personalizeMessage } from '../utils/messages';
 import { isDuplicatePhone, normalizePhone } from '../utils/phone';
 
@@ -138,6 +139,35 @@ describe('google drive y seguimiento manual', () => {
   });
 });
 
+describe('cuenta, safe area y plantillas visuales', () => {
+  it('header compartido respeta safe area sin margen superior negativo', () => {
+    expect(appSource).toContain('safe-area-inset-top, 0px');
+    expect(appSource).toContain('safe-area-inset-left, 0px');
+    expect(appSource).toContain('safe-area-inset-right, 0px');
+    expect(appSource).not.toContain('-mt-[calc(env(safe-area-inset-top)+1rem)] min-w-0 rounded-b-[2rem] bg-brand px-4 pb-6');
+  });
+
+  it('cuenta mantiene seis opciones y filas completas pulsables', () => {
+    ['Información del perfil', 'Mi Feel Great Link', 'Plantillas de mensajes', 'Sistema y reuniones', 'Idioma', 'Cerrar sesión'].forEach((label) => {
+      expect(appSource).toContain(label);
+    });
+    expect(appSource).toContain('min-h-[72px]');
+    expect(appSource).toContain('Crear nueva plantilla');
+  });
+
+  it('editor nuevo no muestra eliminar y el personalizado existente si puede eliminarse', () => {
+    expect(appSource).toContain("isNew ? 'Guardar plantilla' : 'Guardar cambios'");
+    expect(appSource).toContain('!isNew && !isBase && template');
+    expect(appSource).toContain('Eliminar plantilla');
+  });
+
+  it('selector de personas solo usa seguimientos activos no completados', () => {
+    expect(appSource).toContain('activeSelectableMembers');
+    expect(appSource).toContain("programStatus === 'Activo'");
+    expect(appSource).toContain('Añadir mensaje a seleccionados');
+  });
+});
+
 describe('listas y mensajes', () => {
   it('anade contactos a listas', () => {
     const updated = { ...contact, listIds: [...contact.listIds, 2] };
@@ -185,6 +215,62 @@ describe('miembros y programa de 30 dias', () => {
     expect(tasks.find((task) => task.sequenceDay === 22)?.dueTime).toBe('18:15');
     expect(tasks.find((task) => task.sequenceDay === 30)?.dueDate).toBe('2026-07-10');
     expect(tasks.some((task) => [21, 25, 28].includes(task.sequenceDay || -1))).toBe(false);
+  });
+
+  it('mantiene diez plantillas base y permite plantillas personalizadas dia 0 a 30', () => {
+    const base = defaultFollowUpTemplates(new Date('2026-06-01T12:00:00'));
+    expect(base).toHaveLength(10);
+    expect(base.every((template) => template.templateType === 'base')).toBe(true);
+    const custom: MessageTemplate = {
+      id: 99,
+      key: 'custom-99',
+      name: 'Mensaje personalizado',
+      internalTitle: 'Mensaje personalizado',
+      day: 5,
+      defaultTime: '09:45',
+      body: 'Hola {{firstName}}, mensaje nuevo',
+      message: 'Hola {{firstName}}, mensaje nuevo',
+      createdAt: '2026-06-01T00:00:00.000Z',
+      templateType: 'custom',
+      active: true,
+      includeInNewFollowUps: true
+    };
+    const tasks = buildFirst30DayTasks(member, {}, [...base, custom], defaultWeeklyEvents, new Date('2026-06-10T08:00:00'));
+    const customTask = tasks.find((task) => task.templateId === 99);
+    expect(customTask?.dueDate).toBe('2026-06-15');
+    expect(customTask?.dueTime).toBe('09:45');
+    expect(customTask?.source).toBe('custom');
+  });
+
+  it('crea tareas personalizadas para seleccionados sin crear vencidas', () => {
+    const custom: MessageTemplate = {
+      id: 100,
+      key: 'custom-100',
+      name: 'Seleccionado',
+      day: 2,
+      defaultTime: '10:30',
+      body: 'Hola {{firstName}}',
+      message: 'Hola {{firstName}}',
+      createdAt: '2026-06-01T00:00:00.000Z',
+      templateType: 'custom',
+      active: true,
+      includeInNewFollowUps: false
+    };
+    const future = buildTaskFromTemplate(member, custom, {}, defaultWeeklyEvents, new Date('2026-06-11T08:00:00'), { skipPast: true });
+    const past = buildTaskFromTemplate(member, custom, {}, defaultWeeklyEvents, new Date('2026-06-20T08:00:00'), { skipPast: true });
+    expect(future?.sourceKey).toContain('custom:100');
+    expect(past).toBeNull();
+  });
+
+  it('formatea horas y resuelve App Store sin dejar Google Play pendiente', () => {
+    expect(templateDisplayTime({ defaultTime: '09:15' }, 'es')).toContain('9:15');
+    expect(defaultSettings.appStoreLink).toBe('https://apps.apple.com/app/id6445913865');
+    const templates = defaultFollowUpTemplates(new Date('2026-06-01T12:00:00'));
+    const day4 = templates.find((template) => template.key === 'followup-day-4')!;
+    const message = resolveFollowUpMessage(day4, member, { appStoreLink: defaultSettings.appStoreLink, googlePlayLink: '' });
+    expect(message).toContain(defaultSettings.appStoreLink);
+    expect(message).not.toContain('Android:');
+    expect(message).not.toContain('Pendiente');
   });
 
   it('calcula dia actual y mensaje segun tipo de compra', () => {

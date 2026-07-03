@@ -90,6 +90,35 @@ export class LocalDatabase extends Dexie {
       const current = await settings.get('main');
       if (current) await settings.put({ ...current, appStoreLink: current.appStoreLink || '', googlePlayLink: current.googlePlayLink || '' });
     });
+    this.version(6).stores({
+      contacts: '++id, &phone, firstName, lastName, status, category, preferredChannel, language, *listIds, demo',
+      lists: '++id, name, demo',
+      templates: '++id, key, name, day, templateType, active, includeInNewFollowUps, demo',
+      campaigns: '++id, name, createdAt, demo',
+      queue: '++id, campaignId, contactId, status, language',
+      members: '++id, &phone, firstName, lastName, programStatus, interest, contactType, protocolStartDate, language, nextOrderDate',
+      tasks: '++id, memberId, contactId, queueItemId, kind, status, dueDate, dueAt, sourceKey, templateKey, templateId, sequenceDay, language, source',
+      weeklyEvents: '++id, name, weekday, active',
+      mediaAssets: '++id, name, kind, createdAt, source, driveFileId',
+      settings: 'id'
+    }).upgrade(async (tx) => {
+      const templates = tx.table<MessageTemplate, number>('templates');
+      const tasks = tx.table<FollowUpTask, number>('tasks');
+      const settings = tx.table<AppSettings, string>('settings');
+      await templates.toCollection().modify((template) => {
+        template.templateType = template.templateType || 'base';
+        template.active = template.active ?? true;
+        template.includeInNewFollowUps = template.includeInNewFollowUps ?? template.templateType !== 'custom';
+        template.availableVariables = template.availableVariables || ['{{firstName}}', '{{feelGreatReferralLink}}', '{{meetingName}}', '{{meetingDateTime}}', '{{meetingLink}}', '{{appStoreLink}}', '{{googlePlayLink}}'];
+      });
+      await tasks.toCollection().modify((task) => {
+        task.templateType = task.templateType || (task.source === 'custom' ? 'custom' : 'base');
+        task.source = task.source || task.templateType;
+        task.scheduledAt = task.scheduledAt || task.dueAt || (task.dueDate && task.dueTime ? `${task.dueDate}T${task.dueTime}` : undefined);
+      });
+      const current = await settings.get('main');
+      if (current) await settings.put({ ...current, appStoreLink: current.appStoreLink || 'https://apps.apple.com/app/id6445913865', googlePlayLink: current.googlePlayLink || '' });
+    });
   }
 }
 
@@ -105,7 +134,7 @@ export const defaultSettings: AppSettings = {
   googleDriveConnection: 'disconnected',
   googleDriveAccount: '',
   googleDriveTokenHint: '',
-  appStoreLink: '',
+  appStoreLink: 'https://apps.apple.com/app/id6445913865',
   googlePlayLink: '',
   visualTheme: 'golden',
   personalNumber: '14075063846',
@@ -122,7 +151,7 @@ export const defaultSettings: AppSettings = {
 export async function ensureSettings(): Promise<AppSettings> {
   const existing = await db.settings.get('main');
   if (existing) {
-    const merged = { ...defaultSettings, ...existing };
+    const merged = { ...defaultSettings, ...existing, appStoreLink: existing.appStoreLink || defaultSettings.appStoreLink, googlePlayLink: existing.googlePlayLink || '' };
     if (JSON.stringify(merged) !== JSON.stringify(existing)) await db.settings.put(merged);
     return merged;
   }
