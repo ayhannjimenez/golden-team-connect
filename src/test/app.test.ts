@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Contact, MessageTemplate, QueueItem } from '../types';
 import { GOLDEN_TEAM_ACCESS_CODE, isValidAccessCode, normalizeAccessCode } from '../accessConfig';
 import { validateBackup } from '../utils/backup';
 import { exportContactsCsv, parseContactsCsv } from '../utils/csv';
+import { GOOGLE_DRIVE_SCOPE, clearDriveToken, driveFileToMediaAsset, driveTokenFromResponse, readDriveToken, storeDriveToken } from '../utils/googleDrive';
 import { addCalendarDays, buildFirst30DayTasks, buildRenewalTask, currentProgramDay, defaultFollowUpTemplates, defaultWeeklyEvents, findNextMeeting, isBusinessEligible, isTaskOpen, localDateKey, parsePastedProspects, renewalMessageForPurchaseType, resolveFollowUpMessage } from '../utils/followup';
 import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, cleanUnresolvedMessage, messageNeedsFeelGreatLink, personalizeMessage } from '../utils/messages';
 import { isDuplicatePhone, normalizePhone } from '../utils/phone';
+
+const appSource = readFileSync(join(process.cwd(), 'src/App.tsx'), 'utf8');
 
 const contact: Contact = {
   id: 1,
@@ -58,6 +63,78 @@ describe('contactos y telefonos', () => {
     const preview = normalizePhone('(321) 555-1234', '1');
     expect(preview.normalized).toBe('13215551234');
     expect(isDuplicatePhone(preview.normalized, ['13215551234'])).toBe(true);
+  });
+
+  it('normaliza telefonos internacionales para seguimiento', () => {
+    expect(normalizePhone('+52 55 1234 5678', '1').normalized).toBe('525512345678');
+    expect(normalizePhone('52 55 1234 5678', '1').normalized).toBe('525512345678');
+    expect(normalizePhone('+1 (407) 506-3846', '1').normalized).toBe('14075063846');
+    expect(normalizePhone('4075063846', '1').normalized).toBe('14075063846');
+  });
+
+  it('no confunde un telefono local de 10 digitos que empieza con 52 o 57', () => {
+    expect(normalizePhone('5261234567', '1').normalized).toBe('15261234567');
+    expect(normalizePhone('5711234567', '1').normalized).toBe('15711234567');
+  });
+});
+
+describe('google drive y seguimiento manual', () => {
+  it('usa GIS Token Model con scope drive.file y Google Picker', () => {
+    expect(GOOGLE_DRIVE_SCOPE).toBe('https://www.googleapis.com/auth/drive.file');
+    expect(appSource).toContain('google.accounts.oauth2.initTokenClient');
+    expect(appSource).toContain('requestAccessToken');
+    expect(appSource).toContain('.setOAuthToken(accessToken)');
+    expect(appSource).toContain('.setDeveloperKey(googleApiKey)');
+    expect(appSource).toContain('.setAppId(googleAppId)');
+    expect(appSource).not.toContain('o/oauth2/v2/auth');
+  });
+
+  it('guarda token temporalmente y detecta expiracion', () => {
+    const storage = new Map<string, string>();
+    const session = {
+      get length() {
+        return storage.size;
+      },
+      clear: () => storage.clear(),
+      getItem: (key: string) => storage.get(key) || null,
+      key: (index: number) => Array.from(storage.keys())[index] || null,
+      removeItem: (key: string) => {
+        storage.delete(key);
+      },
+      setItem: (key: string, value: string) => {
+        storage.set(key, value);
+      }
+    } as Storage;
+    const token = driveTokenFromResponse({ access_token: 'token-prueba', expires_in: 120 }, 1_000_000)!;
+    storeDriveToken(token, session);
+    expect(readDriveToken(session, 1_010_000)?.accessToken).toBe('token-prueba');
+    expect(readDriveToken(session, 1_120_001)).toBeNull();
+    clearDriveToken(session);
+    expect(readDriveToken(session, 1_010_000)).toBeNull();
+  });
+
+  it('guarda solo metadatos de archivos de Google Drive', () => {
+    const asset = driveFileToMediaAsset({
+      id: 'drive-file-1',
+      name: 'foto.jpg',
+      mimeType: 'image/jpeg',
+      thumbnailUrl: 'https://lh3.googleusercontent.com/thumb',
+      webViewLink: 'https://drive.google.com/file/d/drive-file-1/view'
+    });
+    expect(asset.source).toBe('google-drive');
+    expect(asset.driveFileId).toBe('drive-file-1');
+    expect(asset.dataUrl).toContain('googleusercontent');
+    expect(asset.size).toBe(0);
+  });
+
+  it('seguimiento conserva formulario manual sin botones de contactos del telefono', () => {
+    expect(appSource).not.toContain("importFromDeviceContacts('follow')");
+    expect(appSource).not.toContain('Seleccionar desde Contactos');
+    expect(appSource).not.toContain('Buscar en contactos');
+    expect(appSource).not.toContain('País o código de país');
+    expect(appSource).toContain('type="tel"');
+    expect(appSource).toContain('inputMode="tel"');
+    expect(appSource).toContain('Iniciar seguimiento de 30 días');
   });
 });
 

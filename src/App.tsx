@@ -32,8 +32,19 @@ import type { AppLanguage, AppSettings, Campaign, Channel, Contact, ContactLangu
 import { exportContactsCsv, parseContactsCsv, csvRowToContact } from './utils/csv';
 import { buildFirst30DayTasks, buildLocalDueAt, currentProgramDay, defaultFollowUpTemplates, defaultWeeklyEvents, findNextMeeting, getDeviceTimezone, isTaskOpen, localDateKey, memberName, parsePastedProspects, resolveFollowUpMessage } from './utils/followup';
 import { compressImage, fileToDataUrl, shareImage } from './utils/image';
+import { GOOGLE_DRIVE_SCOPE, clearDriveToken, driveFileToMediaAsset, driveTokenFromResponse, readDriveToken, storeDriveToken } from './utils/googleDrive';
 import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, cleanUnresolvedMessage, personalizeMessage } from './utils/messages';
 import { isDuplicatePhone, normalizePhone } from './utils/phone';
+
+type GoogleTokenResponse = { access_token?: string; expires_in?: number; error?: string; error_description?: string };
+type GoogleTokenClient = { requestAccessToken: (options?: { prompt?: string }) => void };
+
+declare global {
+  interface Window {
+    google?: any;
+    gapi?: any;
+  }
+}
 
 type MainSection = 'inicio' | 'difusion' | 'seguimiento' | 'tareas';
 type TaskGroup = 'Hoy' | 'Vencidas' | 'Próximas' | 'Completadas';
@@ -220,6 +231,28 @@ function driveConfigMissing(language: AppLanguage) {
     : `Faltan valores de Google Cloud: ${missing.join(', ')}.`;
 }
 
+function loadExternalScript(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${src}"]`);
+    if (existing?.dataset.loaded === 'true') return resolve();
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener('error', () => reject(new Error(`No se pudo cargar ${src}`)), { once: true });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.defer = true;
+    script.addEventListener('load', () => {
+      script.dataset.loaded = 'true';
+      resolve();
+    }, { once: true });
+    script.addEventListener('error', () => reject(new Error(`No se pudo cargar ${src}`)), { once: true });
+    document.head.appendChild(script);
+  });
+}
+
 function downloadFile(content: string, filename: string, type: string) {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
@@ -347,12 +380,13 @@ function App() {
   const [activeCampaignId, setActiveCampaignId] = useState<number | null>(null);
   const [queueIndex, setQueueIndex] = useState(0);
   const [driveFilter, setDriveFilter] = useState<DriveFilter>('all');
+  const [googleLibrariesReady, setGoogleLibrariesReady] = useState(false);
+  const [googleLibrariesError, setGoogleLibrariesError] = useState('');
+  const [driveToken, setDriveToken] = useState(() => readDriveToken());
   const [followForm, setFollowForm] = useState({
     firstName: '',
     lastName: '',
     phone: '',
-    countryCode: '1',
-    country: 'Estados Unidos',
     feelGreatReferralLink: '',
     language: 'Español' as ContactLanguage,
     startDate: todayKey(),
@@ -372,6 +406,7 @@ function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
+  const googleTokenClientRef = useRef<GoogleTokenClient | null>(null);
 
   const lang = settings.preferredLanguage || 'es';
   const c = copy[lang];
@@ -381,6 +416,8 @@ function App() {
   const currentQueueItem = selectedQueue[queueIndex];
   const selectedMember = members.find((member) => member.id === selectedMemberId) || null;
   const selectedTask = useMemo(() => [...tasks, ...queueTasksFromQueue(queue)].find((task) => task.id === selectedTaskId) || null, [queue, selectedTaskId, tasks]);
+  const activeDriveToken = driveToken?.expiresAt && driveToken.expiresAt > Date.now() + 30_000 ? driveToken : null;
+  const driveConnected = Boolean(activeDriveToken);
 
   async function ensureFollowUpDefaults() {
     const now = new Date();
@@ -482,6 +519,46 @@ function App() {
       window.removeEventListener('offline', onOffline);
       window.removeEventListener('app-notice', onAppNotice);
     };
+  }, []);
+
+  useEffect(() => {
+    if (!googleConfigured()) return;
+    let cancelled = false;
+    Promise.all([
+      loadExternalScript('https://accounts.google.com/gsi/client'),
+      loadExternalScript('https://apis.google.com/js/api.js')
+    ]).then(() => new Promise<void>((resolve, reject) => {
+      if (!window.gapi) return reject(new Error('Google API no está disponible.'));
+      window.gapi.load('picker', { callback: resolve, onerror: () => reject(new Error('Google Picker no pudo cargar.')) });
+    })).then(() => {
+      if (cancelled || !window.google?.accounts?.oauth2) return;
+      googleTokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
+        client_id: googleClientId,
+        scope: GOOGLE_DRIVE_SCOPE,
+        callback: (response: GoogleTokenResponse) => {
+          if (response.error) {
+            console.error('Google OAuth error', response);
+            setNotice(`Google Drive: ${response.error_description || response.error}`);
+            return;
+          }
+          const token = driveTokenFromResponse(response);
+          if (!token) return setNotice('Google Drive no devolvió access token.');
+          storeDriveToken(token);
+          setDriveToken(token);
+          void saveSettingsPatch({ googleDriveConnection: 'connected', googleDriveTokenHint: String(token.expiresAt) }, 'Google Drive conectado.');
+          void openDrivePicker(token.accessToken);
+        }
+      });
+      setGoogleLibrariesReady(true);
+      setGoogleLibrariesError('');
+    }).catch((error) => {
+      console.error('Google libraries error', error);
+      if (!cancelled) {
+        setGoogleLibrariesReady(false);
+        setGoogleLibrariesError(error instanceof Error ? error.message : 'Google no pudo cargar.');
+      }
+    });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -680,28 +757,11 @@ function App() {
     await loadAll(`${parsed.contacts.length} ${lang === 'en' ? 'contacts imported.' : 'contactos importados.'}`);
   }
 
-  async function importFromDeviceContacts(target: 'broadcast' | 'follow') {
+  async function importFromDeviceContacts(target: 'broadcast') {
     const nav = navigator as Navigator & { contacts?: { select: (props: string[], options: { multiple: boolean }) => Promise<Array<{ name?: string[]; tel?: string[] }>> } };
-    if (!nav.contacts?.select) return setNotice(target === 'follow'
-      ? (lang === 'en' ? 'Device contact picker is not available on this device. Add the person manually.' : 'La selección de contactos no está disponible en este dispositivo. Añade la persona manualmente.')
-      : (lang === 'en' ? 'Device contact picker is not available here. Use CSV, paste, or manual entry.' : 'La selección de contactos del dispositivo no está disponible aquí. Usa CSV, pegar lista o entrada manual.'));
+    if (!nav.contacts?.select) return setNotice(lang === 'en' ? 'Device contact picker is not available here. Use CSV, paste, or manual entry.' : 'La selección de contactos del dispositivo no está disponible aquí. Usa CSV, pegar lista o entrada manual.');
     const picked = await nav.contacts.select(['name', 'tel'], { multiple: true });
     if (!picked.length) return;
-    if (target === 'follow') {
-      const item = picked[0];
-      const name = item.name?.[0] || '';
-      const phone = normalizePhone(item.tel?.[0] || '', settings.defaultCountryCode);
-      setFollowForm((current) => ({
-        ...current,
-        firstName: name.split(/\s+/)[0] || current.firstName,
-        lastName: name.split(/\s+/).slice(1).join(' ') || current.lastName,
-        phone: phone.valid ? phone.normalized : item.tel?.[0] || current.phone
-      }));
-      setNotice(picked.length > 1
-        ? (lang === 'en' ? 'First contact loaded. Save it, then select the next person.' : 'Primer contacto cargado. Guárdalo y luego selecciona la próxima persona.')
-        : (lang === 'en' ? 'Contact loaded. Complete the follow-up details.' : 'Contacto cargado. Completa los datos del seguimiento.'));
-      return;
-    }
     if (target === 'broadcast' && selectedList?.id) {
       const rows: Contact[] = [];
       for (const item of picked) {
@@ -761,28 +821,65 @@ function App() {
     await loadAll(lang === 'en' ? 'Media deleted.' : 'Media eliminada.');
   }
 
+  async function openDrivePicker(accessToken: string) {
+    if (!window.google?.picker) return setNotice('Google Picker no está listo todavía.');
+    const picker = new window.google.picker.PickerBuilder()
+      .setOAuthToken(accessToken)
+      .setDeveloperKey(googleApiKey)
+      .setAppId(googleAppId)
+      .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED)
+      .addView(new window.google.picker.DocsView().setIncludeFolders(false).setSelectFolderEnabled(false).setMimeTypes('image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm'))
+      .setCallback(async (data: any) => {
+        if (data.action === window.google.picker.Action.CANCEL) return;
+        if (data.action !== window.google.picker.Action.PICKED) return;
+        const docs = (data.docs || []) as Array<any>;
+        const assets = docs.map((doc) => driveFileToMediaAsset({
+          id: doc.id,
+          name: doc.name,
+          mimeType: doc.mimeType || '',
+          thumbnailUrl: doc.thumbnails?.[0]?.url || doc.iconUrl,
+          webViewLink: doc.url,
+          url: doc.url
+        }));
+        if (!assets.length) return;
+        const existing = new Set((await db.mediaAssets.where('source').equals('google-drive').toArray()).map((asset) => asset.driveFileId));
+        const fresh = assets.filter((asset) => asset.driveFileId && !existing.has(asset.driveFileId));
+        if (fresh.length) await db.mediaAssets.bulkAdd(fresh);
+        await loadAll(`${fresh.length || assets.length} archivo(s) de Drive añadidos.`);
+      })
+      .build();
+    picker.setVisible(true);
+  }
+
+  function requestGoogleDriveToken(prompt = '') {
+    if (!googleConfigured()) return setNotice(`${c.drivePending}. ${driveConfigMissing(lang)}`);
+    if (!googleLibrariesReady || !googleTokenClientRef.current) return setNotice(googleLibrariesError || 'Google Drive todavía está cargando.');
+    googleTokenClientRef.current.requestAccessToken(prompt ? { prompt } : undefined);
+  }
+
   function connectGoogleDrive() {
     if (!googleConfigured()) return setNotice(`${c.drivePending}. ${driveConfigMissing(lang)}`);
-    const redirectUri = `${window.location.origin}${window.location.pathname}`;
-    const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-    authUrl.searchParams.set('client_id', googleClientId);
-    authUrl.searchParams.set('redirect_uri', redirectUri);
-    authUrl.searchParams.set('response_type', 'token');
-    authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/drive.file');
-    authUrl.searchParams.set('include_granted_scopes', 'true');
-    authUrl.searchParams.set('prompt', 'consent');
-    window.open(authUrl.toString(), '_blank', 'noopener,noreferrer');
-    setNotice(lang === 'en' ? 'Use the official Google consent screen. Picker credentials are configured by environment variables.' : 'Usa la pantalla oficial de Google. Las credenciales del Picker se configuran con variables de entorno.');
+    requestGoogleDriveToken('consent');
   }
 
   async function disconnectGoogleDrive() {
     if (!confirm(lang === 'en' ? 'Disconnect Google Drive? Original files will not be deleted.' : '¿Desconectar Google Drive? No se borrarán los archivos originales.')) return;
+    clearDriveToken();
+    setDriveToken(null);
     await saveSettingsPatch({ googleDriveConnection: 'disconnected', googleDriveAccount: '', googleDriveTokenHint: '' }, lang === 'en' ? 'Drive disconnected.' : 'Drive desconectado.');
   }
 
   function addFromDrive() {
     if (!googleConfigured()) return setNotice(`${c.drivePending}. ${driveConfigMissing(lang)}`);
-    setNotice(lang === 'en' ? 'Google Picker is ready to be enabled with your OAuth Client ID, API Key, and App ID.' : 'Google Picker queda listo para activarse con OAuth Client ID, API Key y App ID.');
+    const token = readDriveToken();
+    if (!token) {
+      clearDriveToken();
+      setDriveToken(null);
+      requestGoogleDriveToken('');
+      return;
+    }
+    setDriveToken(token);
+    void openDrivePicker(token.accessToken);
   }
 
   function previewBroadcastContacts() {
@@ -883,7 +980,7 @@ function App() {
 
   async function saveFollowPerson(event: FormEvent) {
     event.preventDefault();
-    const preview = normalizePhone(followForm.phone, followForm.countryCode || settings.defaultCountryCode);
+    const preview = normalizePhone(followForm.phone, settings.defaultCountryCode);
     const referralLink = normalizeFeelGreatLink(followForm.feelGreatReferralLink);
     if (!followForm.firstName.trim()) return setNotice(lang === 'en' ? 'Name is required.' : 'Escribe el nombre.');
     if (!preview.valid) return setNotice(preview.message);
@@ -898,8 +995,8 @@ function App() {
       firstName: followForm.firstName.trim(),
       lastName: followForm.lastName.trim(),
       phone: preview.normalized,
-      countryCode: followForm.countryCode || settings.defaultCountryCode,
-      country: followForm.country || settings.defaultCountry,
+      countryCode: preview.countryCode || settings.defaultCountryCode,
+      country: settings.defaultCountry,
       purchaseDate: followForm.startDate,
       protocolStartDate: followForm.startDate,
       feelGreatReferralLink: referralLink,
@@ -925,7 +1022,7 @@ function App() {
       const missing = nextTasks.filter((task) => !sourceKeys.has(task.sourceKey));
       if (missing.length) await db.tasks.bulkAdd(missing);
     });
-    setFollowForm({ firstName: '', lastName: '', phone: '', countryCode: settings.defaultCountryCode, country: settings.defaultCountry, feelGreatReferralLink: '', language: 'Español', startDate: todayKey(), channel: 'WhatsApp', purchaseType: 'Compra individual', contactType: 'Miembro' });
+    setFollowForm({ firstName: '', lastName: '', phone: '', feelGreatReferralLink: '', language: 'Español', startDate: todayKey(), channel: 'WhatsApp', purchaseType: 'Compra individual', contactType: 'Miembro' });
     await loadAll(lang === 'en' ? 'Follow-up started.' : 'Seguimiento activado.');
   }
 
@@ -1436,20 +1533,19 @@ function App() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-black text-ink">{c.library}</h2>
-          <p className="text-sm text-slate-500">{settings.googleDriveConnection === 'connected' ? (settings.googleDriveAccount || (lang === 'en' ? 'Connected account' : 'Cuenta conectada')) : c.connectDriveTitle}</p>
+          <p className="text-sm text-slate-500">{driveConnected ? 'Google Drive conectado' : c.connectDriveTitle}</p>
         </div>
-        {settings.googleDriveConnection === 'connected' ? <Badge tone="good">Google Drive</Badge> : <Badge tone="warn">{googleConfigured() ? (lang === 'en' ? 'Ready' : 'Listo') : c.drivePending}</Badge>}
+        {driveConnected ? <Badge tone="good">Google Drive conectado</Badge> : <Badge tone="warn">{googleConfigured() ? (lang === 'en' ? 'Ready' : 'Listo') : c.drivePending}</Badge>}
       </div>
-      {settings.googleDriveConnection !== 'connected' ? (
+      {!driveConnected ? (
         <div className="mt-4 rounded-2xl bg-slate-50 p-4">
-          <p className="text-sm leading-relaxed text-slate-600">{googleConfigured() ? c.connectDriveTitle : `${c.drivePending}. ${driveConfigMissing(lang)}`}</p>
-          <PrimaryButton onClick={connectGoogleDrive} className="mt-4"><Cloud size={17} />{c.connectDrive}</PrimaryButton>
+          <p className="text-sm leading-relaxed text-slate-600">{googleConfigured() ? (googleLibrariesReady ? c.connectDriveTitle : (googleLibrariesError || 'Preparando Google Drive...')) : `${c.drivePending}. ${driveConfigMissing(lang)}`}</p>
+          <PrimaryButton onClick={connectGoogleDrive} disabled={!googleConfigured() || !googleLibrariesReady} className="mt-4"><Cloud size={17} />{c.connectDrive}</PrimaryButton>
         </div>
       ) : (
         <div className="mt-4 grid gap-3">
           <div className="flex flex-wrap gap-2">
-            <PrimaryButton onClick={addFromDrive}><Cloud size={17} />{c.addFromDrive}</PrimaryButton>
-            <SecondaryButton onClick={addFromDrive}><Upload size={17} />{c.uploadToDrive}</SecondaryButton>
+            <PrimaryButton onClick={addFromDrive}><Cloud size={17} />Seleccionar desde Drive</PrimaryButton>
             <SecondaryButton onClick={disconnectGoogleDrive}><LogOut size={17} />{c.disconnectDrive}</SecondaryButton>
           </div>
           <div className="grid grid-cols-3 gap-2 rounded-2xl bg-slate-100 p-1">
@@ -1477,7 +1573,7 @@ function App() {
 
   const renderFollowUps = () => (
     <div className="grid gap-4">
-      <Header title={c.followUps} subtitle={c.followUpsSub} action={<PrimaryButton onClick={() => importFromDeviceContacts('follow')} className="bg-white text-brand hover:bg-white/90"><Phone size={17} />{c.importContact}</PrimaryButton>} />
+      <Header title={c.followUps} subtitle={c.followUpsSub} />
       <div className="grid gap-3 sm:grid-cols-4">
         <Card><p className="text-xs font-bold text-slate-500">{lang === 'en' ? 'Active people' : 'Personas activas'}</p><strong className="text-3xl">{activeFollowPeople.length}</strong></Card>
         <Card><p className="text-xs font-bold text-slate-500">{c.today}</p><strong className="text-3xl">{todayTasks.filter((task) => taskType(task) === 'Seguimiento').length}</strong></Card>
@@ -1488,13 +1584,11 @@ function App() {
         <form className="grid gap-3" onSubmit={saveFollowPerson}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-black text-ink">{c.addPeople}</h2>
-            <SecondaryButton onClick={() => importFromDeviceContacts('follow')}><Phone size={16} />Seleccionar desde Contactos</SecondaryButton>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label={c.name}><input className="input" value={followForm.firstName} onChange={(event) => setFollowForm((current) => ({ ...current, firstName: event.target.value }))} /></Field>
             <Field label="Apellido opcional"><input className="input" value={followForm.lastName} onChange={(event) => setFollowForm((current) => ({ ...current, lastName: event.target.value }))} /></Field>
-            <Field label={c.phone}><input className="input" value={followForm.phone} onChange={(event) => setFollowForm((current) => ({ ...current, phone: event.target.value }))} /></Field>
-            <Field label="País o código de país"><input className="input" value={followForm.countryCode} onChange={(event) => setFollowForm((current) => ({ ...current, countryCode: event.target.value }))} /></Field>
+            <Field label={c.phone} helper="Incluye el código del país. Ejemplo: +52 para México."><input className="input" type="tel" inputMode="tel" autoComplete="tel" value={followForm.phone} onChange={(event) => setFollowForm((current) => ({ ...current, phone: event.target.value }))} placeholder="+1 407 555 1234" /></Field>
             <Field label="Enlace personal de Feel Great" helper={!followForm.feelGreatReferralLink ? 'Puedes continuar si todavía no lo tienes, con confirmación.' : undefined}><input className="input" value={followForm.feelGreatReferralLink} onChange={(event) => setFollowForm((current) => ({ ...current, feelGreatReferralLink: event.target.value }))} placeholder="https://..." /></Field>
             <Field label={c.language}><select className="input" value={followForm.language} onChange={(event) => setFollowForm((current) => ({ ...current, language: event.target.value as ContactLanguage }))}><option>Español</option><option>English</option></select></Field>
             <Field label="Fecha de inicio"><input className="input" type="date" value={followForm.startDate} onChange={(event) => setFollowForm((current) => ({ ...current, startDate: event.target.value }))} /></Field>
@@ -1504,13 +1598,6 @@ function App() {
           </div>
           <PrimaryButton type="submit"><Plus size={17} />Iniciar seguimiento de 30 días</PrimaryButton>
         </form>
-      </Card>
-      <Card>
-        <h2 className="text-lg font-black text-ink">{c.importContact}</h2>
-        <div className="mt-3 grid gap-3">
-          <SecondaryButton onClick={() => importFromDeviceContacts('follow')}><Phone size={16} />Seleccionar desde Contactos</SecondaryButton>
-          <SecondaryButton onClick={() => setNotice('Completa el formulario manual de Añadir persona.')}><Plus size={16} />Añadir manualmente</SecondaryButton>
-        </div>
       </Card>
       <div className="grid gap-3">
         {[...activeFollowPeople, ...completedFollowPeople].map((member) => renderMemberCard(member))}
@@ -1553,7 +1640,7 @@ function App() {
               <SecondaryButton onClick={() => regenerateFollowTasks(member)}><Bell size={16} />Regenerar tareas</SecondaryButton>
               {member.programStatus === 'Activo' ? <SecondaryButton onClick={() => toggleMemberStatus(member, 'Pausado')}>Pausar</SecondaryButton> : null}
               {member.programStatus === 'Pausado' ? <SecondaryButton onClick={() => toggleMemberStatus(member, 'Activo')}>Reanudar</SecondaryButton> : null}
-              {member.programStatus === 'Completado' ? <SecondaryButton onClick={() => { setFollowForm((current) => ({ ...current, firstName: member.firstName, lastName: member.lastName || '', phone: member.phone, countryCode: member.countryCode, country: member.country || settings.defaultCountry, feelGreatReferralLink: member.feelGreatReferralLink || '', channel: member.preferredChannel, purchaseType: member.purchaseType, contactType: member.contactType || 'Miembro', startDate: todayKey() })); setSelectedMemberId(null); }}>Iniciar nuevo ciclo</SecondaryButton> : null}
+              {member.programStatus === 'Completado' ? <SecondaryButton onClick={() => { setFollowForm((current) => ({ ...current, firstName: member.firstName, lastName: member.lastName || '', phone: member.phone, feelGreatReferralLink: member.feelGreatReferralLink || '', channel: member.preferredChannel, purchaseType: member.purchaseType, contactType: member.contactType || 'Miembro', startDate: todayKey() })); setSelectedMemberId(null); }}>Iniciar nuevo ciclo</SecondaryButton> : null}
             </div>
           </Card>
           {nextTask ? renderTaskDetail(nextTask) : <Card><p className="text-sm text-slate-500">No hay próxima tarea pendiente.</p></Card>}
