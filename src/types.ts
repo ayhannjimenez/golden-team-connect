@@ -5,11 +5,12 @@ export type QueueStatus = 'Pendiente' | 'Abierto' | 'Enviado' | 'Omitido' | 'Fal
 export type VisualTheme = 'golden' | 'classic' | 'emerald' | 'burgundy';
 export type AppLanguage = 'es' | 'en';
 export type ContactLanguage = 'Español' | 'English';
-export type MemberPurchaseType = 'Autosuscripción' | 'Compra única' | 'No sé';
+export type MemberPurchaseType = 'Autosuscripción' | 'Compra única' | 'No sé' | 'Compra individual' | 'Suscripción' | 'Entrega física';
 export type MemberInterest = 'Solo protocolo' | 'Interesado en negocio' | 'Distribuidor activo';
 export type MemberProgramStatus = 'Sin iniciar' | 'Activo' | 'Pausado' | 'Completado';
 export type TaskKind = 'Difusión' | 'Seguimiento' | 'Reunión' | 'Miembro' | 'Renovación' | 'LA Fitness';
-export type TaskStatus = 'Pendiente' | 'Completada' | 'Pospuesta';
+export type TaskStatus = 'Pendiente' | 'Completada' | 'Pospuesta' | 'Cancelada';
+export type ContactType = 'Miembro' | 'Distribuidor' | 'Ambos';
 
 export interface Member {
   id?: number;
@@ -22,19 +23,32 @@ export interface Member {
   purchaseDate: string;
   estimatedDeliveryDate?: string;
   protocolStartDate?: string;
+  feelGreatReferralLink?: string;
   preferredChannel: Exclude<Channel, 'Ambos'>;
   language?: ContactLanguage;
   purchaseType: MemberPurchaseType;
+  contactType?: ContactType;
   interest: MemberInterest;
   notes?: string;
   programActive: boolean;
   programStatus: MemberProgramStatus;
+  completedAt?: string;
+  timezone?: string;
   weeklyEventsActive?: boolean;
   followUpTime?: string;
   reminderMinutes?: 15 | 30;
   nextOrderDate?: string;
   createdAt: string;
+  updatedAt?: string;
   convertedFromContactId?: number;
+}
+
+export interface MeetingSnapshot {
+  id?: number;
+  name: string;
+  dateTime: string;
+  link: string;
+  audience?: string;
 }
 
 export interface FollowUpTask {
@@ -53,14 +67,24 @@ export interface FollowUpTask {
   dueTime: string;
   reminderMinutes?: 15 | 30;
   programDay?: number;
+  sequenceDay?: number;
+  templateKey?: string;
+  templateVersion?: number;
   message: string;
+  resolvedMessage?: string;
   status: TaskStatus;
   completedAt?: string;
+  sentConfirmedAt?: string;
+  attemptedAt?: string;
+  attemptedChannel?: Exclude<Channel, 'Ambos'>;
   completedChannel?: Exclude<Channel, 'Ambos'>;
   notes?: string;
   createdAt: string;
   sourceKey?: string;
   meetingLink?: string;
+  meetingId?: number;
+  meetingSnapshot?: MeetingSnapshot;
+  dueAt?: string;
 }
 
 export interface WeeklyEvent {
@@ -70,6 +94,7 @@ export interface WeeklyEvent {
   eventTime: string;
   reminderTime: string;
   link: string;
+  audience?: string;
   message: string;
   messageEn?: string;
   active: boolean;
@@ -115,6 +140,15 @@ export interface MessageTemplate {
   body: string;
   createdAt: string;
   demo?: boolean;
+  key?: string;
+  internalTitle?: string;
+  day?: number;
+  defaultTime?: string;
+  message?: string;
+  originalMessage?: string;
+  availableVariables?: string[];
+  updatedAt?: string;
+  templateVersion?: number;
 }
 
 export interface CampaignImage {
@@ -183,6 +217,8 @@ export interface AppSettings {
   googleDriveConnection?: 'disconnected' | 'connected';
   googleDriveAccount?: string;
   googleDriveTokenHint?: string;
+  appStoreLink?: string;
+  googlePlayLink?: string;
   visualTheme?: VisualTheme;
   personalNumber: string;
   defaultCountryCode: string;

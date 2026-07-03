@@ -28,18 +28,18 @@ import {
 } from 'lucide-react';
 import { db, defaultSettings, ensureSettings } from './db';
 import { isValidAccessCode, normalizeAccessCode } from './accessConfig';
-import type { AppLanguage, AppSettings, Campaign, Channel, Contact, ContactLanguage, FollowUpTask, InternalList, MediaAsset, Member, QueueItem, QueueStatus, WeeklyEvent } from './types';
+import type { AppLanguage, AppSettings, Campaign, Channel, Contact, ContactLanguage, ContactType, FollowUpTask, InternalList, MediaAsset, Member, MessageTemplate, QueueItem, QueueStatus, WeeklyEvent } from './types';
 import { exportContactsCsv, parseContactsCsv, csvRowToContact } from './utils/csv';
-import { buildFirst30DayTasks, currentProgramDay, defaultWeeklyEvents, memberName, parsePastedProspects } from './utils/followup';
+import { buildFirst30DayTasks, buildLocalDueAt, currentProgramDay, defaultFollowUpTemplates, defaultWeeklyEvents, findNextMeeting, getDeviceTimezone, isTaskOpen, localDateKey, memberName, parsePastedProspects, resolveFollowUpMessage } from './utils/followup';
 import { compressImage, fileToDataUrl, shareImage } from './utils/image';
-import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, personalizeMessage } from './utils/messages';
+import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, cleanUnresolvedMessage, personalizeMessage } from './utils/messages';
 import { isDuplicatePhone, normalizePhone } from './utils/phone';
 
 type MainSection = 'inicio' | 'difusion' | 'seguimiento' | 'tareas';
 type TaskGroup = 'Hoy' | 'Vencidas' | 'Próximas' | 'Completadas';
 type TaskFilter = 'Todas' | 'Difusión' | 'Seguimiento' | 'Reuniones';
 type Audience = ContactLanguage | 'Manual';
-type AccountPanel = 'profile' | 'link' | 'language' | null;
+type AccountPanel = 'profile' | 'link' | 'templates' | 'system' | 'language' | null;
 type BroadcastTab = 'lists' | 'library';
 type DriveFilter = 'all' | 'photos' | 'videos';
 
@@ -151,7 +151,7 @@ function todayIso() {
 }
 
 function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+  return localDateKey();
 }
 
 function shortDate(value?: string, language: AppLanguage = 'es') {
@@ -319,6 +319,7 @@ function App() {
   const [members, setMembers] = useState<Member[]>([]);
   const [tasks, setTasks] = useState<FollowUpTask[]>([]);
   const [weeklyEvents, setWeeklyEvents] = useState<WeeklyEvent[]>([]);
+  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
   const [entryName, setEntryName] = useState('');
   const [entryLink, setEntryLink] = useState('');
@@ -350,15 +351,22 @@ function App() {
     firstName: '',
     lastName: '',
     phone: '',
+    countryCode: '1',
+    country: 'Estados Unidos',
+    feelGreatReferralLink: '',
     language: 'Español' as ContactLanguage,
     startDate: todayKey(),
     channel: 'WhatsApp' as Exclude<Channel, 'Ambos'>,
-    followUpTime: '10:00',
-    reminderMinutes: 30 as 15 | 30,
-    weeklyEventsActive: false
+    purchaseType: 'Compra individual' as Member['purchaseType'],
+    contactType: 'Miembro' as ContactType
   });
-  const [followImportText, setFollowImportText] = useState('');
   const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState<string | null>(null);
+  const [templateDraft, setTemplateDraft] = useState('');
+  const [selectedMeetingId, setSelectedMeetingId] = useState<number | 'new' | null>(null);
+  const [meetingForm, setMeetingForm] = useState({ name: '', weekday: 1, eventTime: '19:00', link: '', audience: '', active: true });
+  const [pendingSendTask, setPendingSendTask] = useState<{ taskId: number; channel: 'WhatsApp' | 'SMS' } | null>(null);
+  const [showSendConfirm, setShowSendConfirm] = useState(false);
   const [taskGroup, setTaskGroup] = useState<TaskGroup>('Hoy');
   const [taskFilter, setTaskFilter] = useState<TaskFilter>('Todas');
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
@@ -374,9 +382,44 @@ function App() {
   const selectedMember = members.find((member) => member.id === selectedMemberId) || null;
   const selectedTask = useMemo(() => [...tasks, ...queueTasksFromQueue(queue)].find((task) => task.id === selectedTaskId) || null, [queue, selectedTaskId, tasks]);
 
+  async function ensureFollowUpDefaults() {
+    const now = new Date();
+    const existingTemplates = await db.templates.toArray();
+    const defaults = defaultFollowUpTemplates(now);
+    for (const item of defaults) {
+      const existing = existingTemplates.find((template) => template.key === item.key);
+      if (!existing) await db.templates.add(item);
+    }
+    if (!(await db.weeklyEvents.count())) await db.weeklyEvents.bulkAdd(defaultWeeklyEvents.map((event) => ({ ...event, updatedAt: now.toISOString() })));
+  }
+
+  async function migrateActiveFollowUps() {
+    const [allMembers, allTemplates, allEvents, currentSettings] = await Promise.all([db.members.toArray(), db.templates.toArray(), db.weeklyEvents.toArray(), ensureSettings()]);
+    for (const member of allMembers.filter((item) => item.id && item.protocolStartDate && ['Activo', 'Pausado'].includes(item.programStatus))) {
+      const memberTasks = await db.tasks.where('memberId').equals(member.id!).toArray();
+      const completedDays = new Set(memberTasks.filter((task) => task.status === 'Completada').map((task) => task.sequenceDay ?? task.programDay).filter((day): day is number => typeof day === 'number'));
+      const pendingProgramTasks = memberTasks.filter((task) => task.program === 'Primeros 30 días' && isTaskOpen(task));
+      if (pendingProgramTasks.length) await db.tasks.bulkDelete(pendingProgramTasks.map((task) => task.id!).filter(Boolean));
+      const normalizedMember: Member = {
+        ...member,
+        feelGreatReferralLink: member.feelGreatReferralLink || '',
+        contactType: member.contactType || (member.interest === 'Distribuidor activo' || member.interest === 'Interesado en negocio' ? 'Distribuidor' : 'Miembro'),
+        timezone: member.timezone || getDeviceTimezone(),
+        updatedAt: member.updatedAt || todayIso()
+      };
+      await db.members.update(member.id!, normalizedMember);
+      const nextTasks = buildFirst30DayTasks(normalizedMember, currentSettings, allTemplates, allEvents).filter((task) => !completedDays.has(task.sequenceDay || 0));
+      const existingSourceKeys = new Set((await db.tasks.where('memberId').equals(member.id!).toArray()).map((task) => task.sourceKey).filter(Boolean));
+      const missing = nextTasks.filter((task) => !existingSourceKeys.has(task.sourceKey));
+      if (missing.length) await db.tasks.bulkAdd(missing);
+    }
+  }
+
   async function loadAll(message?: string) {
     await cleanupDemoRecords();
-    const [loadedSettings, loadedContacts, loadedLists, loadedCampaigns, loadedQueue, loadedMembers, loadedTasks, loadedEvents, loadedMedia] = await Promise.all([
+    await ensureFollowUpDefaults();
+    await migrateActiveFollowUps();
+    const [loadedSettings, loadedContacts, loadedLists, loadedCampaigns, loadedQueue, loadedMembers, loadedTasks, loadedEvents, loadedTemplates, loadedMedia] = await Promise.all([
       ensureSettings(),
       db.contacts.orderBy('firstName').toArray(),
       db.lists.orderBy('name').toArray(),
@@ -385,6 +428,7 @@ function App() {
       db.members.orderBy('firstName').toArray(),
       db.tasks.orderBy('dueDate').toArray(),
       db.weeklyEvents.orderBy('weekday').toArray(),
+      db.templates.orderBy('day').toArray(),
       db.mediaAssets.orderBy('createdAt').reverse().toArray()
     ]);
     setSettings(loadedSettings);
@@ -397,6 +441,7 @@ function App() {
     setMembers(loadedMembers);
     setTasks(loadedTasks);
     setWeeklyEvents(loadedEvents);
+    setTemplates(loadedTemplates);
     setMediaAssets(loadedMedia);
     if (!loadedSettings.sessionActive) {
       setEntryName((current) => current || loadedSettings.ownerName || '');
@@ -443,6 +488,18 @@ function App() {
     setQueueIndex(bestQueueIndex(selectedQueue));
   }, [activeCampaignId, selectedQueue.length]);
 
+  useEffect(() => {
+    const askConfirmation = () => {
+      if (pendingSendTask && document.visibilityState === 'visible') setShowSendConfirm(true);
+    };
+    window.addEventListener('focus', askConfirmation);
+    document.addEventListener('visibilitychange', askConfirmation);
+    return () => {
+      window.removeEventListener('focus', askConfirmation);
+      document.removeEventListener('visibilitychange', askConfirmation);
+    };
+  }, [pendingSendTask]);
+
   const listContacts = useMemo(() => {
     if (!selectedList?.id) return [];
     return contacts.filter((contact) => contact.listIds.includes(selectedList.id!));
@@ -453,12 +510,14 @@ function App() {
     return listContacts.filter((contact) => contactLanguage(contact) === listLanguageFilter);
   }, [listContacts, listLanguageFilter]);
 
-  const activeFollowPeople = useMemo(() => members.filter((member) => member.programStatus !== 'Completado'), [members]);
+  const activeFollowPeople = useMemo(() => members.filter((member) => member.programStatus === 'Activo'), [members]);
   const completedFollowPeople = useMemo(() => members.filter((member) => member.programStatus === 'Completado'), [members]);
+  const memberStatusById = useMemo(() => new Map(members.map((member) => [member.id, member.programStatus])), [members]);
   const actionTasks = useMemo(() => [...tasks, ...queueTasksFromQueue(queue)].sort((a, b) => `${a.dueDate} ${a.dueTime}`.localeCompare(`${b.dueDate} ${b.dueTime}`)), [queue, tasks]);
-  const todayTasks = useMemo(() => actionTasks.filter((task) => task.status !== 'Completada' && task.dueDate === todayKey()), [actionTasks]);
-  const overdueTasks = useMemo(() => actionTasks.filter((task) => task.status !== 'Completada' && task.dueDate < todayKey()), [actionTasks]);
-  const upcomingTasks = useMemo(() => actionTasks.filter((task) => task.status !== 'Completada' && task.dueDate > todayKey()), [actionTasks]);
+  const visibleOpenTasks = useMemo(() => actionTasks.filter((task) => isTaskOpen(task) && (!task.memberId || memberStatusById.get(task.memberId) !== 'Pausado' && memberStatusById.get(task.memberId) !== 'Completado')), [actionTasks, memberStatusById]);
+  const todayTasks = useMemo(() => visibleOpenTasks.filter((task) => task.dueDate === todayKey()), [visibleOpenTasks]);
+  const overdueTasks = useMemo(() => visibleOpenTasks.filter((task) => task.dueDate < todayKey()), [visibleOpenTasks]);
+  const upcomingTasks = useMemo(() => visibleOpenTasks.filter((task) => task.dueDate > todayKey()), [visibleOpenTasks]);
   const completedTasks = useMemo(() => actionTasks.filter((task) => task.status === 'Completada'), [actionTasks]);
   const taskBadge = todayTasks.length + overdueTasks.length;
 
@@ -623,9 +682,26 @@ function App() {
 
   async function importFromDeviceContacts(target: 'broadcast' | 'follow') {
     const nav = navigator as Navigator & { contacts?: { select: (props: string[], options: { multiple: boolean }) => Promise<Array<{ name?: string[]; tel?: string[] }>> } };
-    if (!nav.contacts?.select) return setNotice(lang === 'en' ? 'Device contact picker is not available here. Use CSV, paste, or manual entry.' : 'La selección de contactos del dispositivo no está disponible aquí. Usa CSV, pegar lista o entrada manual.');
+    if (!nav.contacts?.select) return setNotice(target === 'follow'
+      ? (lang === 'en' ? 'Device contact picker is not available on this device. Add the person manually.' : 'La selección de contactos no está disponible en este dispositivo. Añade la persona manualmente.')
+      : (lang === 'en' ? 'Device contact picker is not available here. Use CSV, paste, or manual entry.' : 'La selección de contactos del dispositivo no está disponible aquí. Usa CSV, pegar lista o entrada manual.'));
     const picked = await nav.contacts.select(['name', 'tel'], { multiple: true });
     if (!picked.length) return;
+    if (target === 'follow') {
+      const item = picked[0];
+      const name = item.name?.[0] || '';
+      const phone = normalizePhone(item.tel?.[0] || '', settings.defaultCountryCode);
+      setFollowForm((current) => ({
+        ...current,
+        firstName: name.split(/\s+/)[0] || current.firstName,
+        lastName: name.split(/\s+/).slice(1).join(' ') || current.lastName,
+        phone: phone.valid ? phone.normalized : item.tel?.[0] || current.phone
+      }));
+      setNotice(picked.length > 1
+        ? (lang === 'en' ? 'First contact loaded. Save it, then select the next person.' : 'Primer contacto cargado. Guárdalo y luego selecciona la próxima persona.')
+        : (lang === 'en' ? 'Contact loaded. Complete the follow-up details.' : 'Contacto cargado. Completa los datos del seguimiento.'));
+      return;
+    }
     if (target === 'broadcast' && selectedList?.id) {
       const rows: Contact[] = [];
       for (const item of picked) {
@@ -786,6 +862,10 @@ function App() {
     const phone = 'contactSnapshot' in target ? target.contactSnapshot.phone : target.phone;
     const text = 'personalizedMessage' in target ? target.personalizedMessage : message || ('message' in target ? target.message : '');
     if (!online) setNotice(lang === 'en' ? 'WhatsApp may need connection.' : 'WhatsApp puede requerir conexión.');
+    if ('kind' in target && target.id && target.id > 0) {
+      await db.tasks.update(target.id, { attemptedAt: todayIso(), attemptedChannel: 'WhatsApp' });
+      setPendingSendTask({ taskId: target.id, channel: 'WhatsApp' });
+    }
     window.open(buildWhatsAppLink(phone, text), '_blank', 'noopener,noreferrer');
     if ('personalizedMessage' in target) await setQueueStatus(target, 'Abierto');
   }
@@ -793,109 +873,67 @@ function App() {
   async function openSmsFor(target: QueueItem | FollowUpTask | Contact, message?: string) {
     const phone = 'contactSnapshot' in target ? target.contactSnapshot.phone : target.phone;
     const text = 'personalizedMessage' in target ? target.personalizedMessage : message || ('message' in target ? target.message : '');
+    if ('kind' in target && target.id && target.id > 0) {
+      await db.tasks.update(target.id, { attemptedAt: todayIso(), attemptedChannel: 'SMS' });
+      setPendingSendTask({ taskId: target.id, channel: 'SMS' });
+    }
     window.location.href = buildSmsLink(phone, text);
     if ('personalizedMessage' in target) await setQueueStatus(target, 'Abierto');
   }
 
   async function saveFollowPerson(event: FormEvent) {
     event.preventDefault();
-    const preview = normalizePhone(followForm.phone, settings.defaultCountryCode);
+    const preview = normalizePhone(followForm.phone, followForm.countryCode || settings.defaultCountryCode);
+    const referralLink = normalizeFeelGreatLink(followForm.feelGreatReferralLink);
     if (!followForm.firstName.trim()) return setNotice(lang === 'en' ? 'Name is required.' : 'Escribe el nombre.');
     if (!preview.valid) return setNotice(preview.message);
-    if (isDuplicatePhone(preview.normalized, members.map((member) => member.phone))) return setNotice(lang === 'en' ? 'That phone is already in follow-ups.' : 'Ese teléfono ya existe en seguimiento.');
+    if (!followForm.startDate) return setNotice(lang === 'en' ? 'Start date is required.' : 'Selecciona la fecha de inicio.');
+    if (referralLink && !isValidFeelGreatLink(referralLink)) return setNotice(lang === 'en' ? 'Check the Feel Great Link.' : 'Revisa el enlace personal de Feel Great.');
+    if (!referralLink && !confirm(lang === 'en' ? 'This person has no individual Feel Great Link yet. Continue anyway?' : 'Esta persona todavía no tiene enlace individual de Feel Great. ¿Continuar de todos modos?')) return;
+    const existing = members.find((member) => member.phone === preview.normalized);
+    if (existing?.programStatus === 'Activo' && !confirm(lang === 'en' ? 'This person already has an active program. Restart it?' : 'Esta persona ya tiene un programa activo. ¿Reiniciarlo?')) return;
+    const now = new Date();
     const member: Member = {
+      ...(existing || {}),
       firstName: followForm.firstName.trim(),
       lastName: followForm.lastName.trim(),
       phone: preview.normalized,
-      countryCode: settings.defaultCountryCode,
-      country: settings.defaultCountry,
+      countryCode: followForm.countryCode || settings.defaultCountryCode,
+      country: followForm.country || settings.defaultCountry,
       purchaseDate: followForm.startDate,
       protocolStartDate: followForm.startDate,
+      feelGreatReferralLink: referralLink,
       preferredChannel: followForm.channel,
       language: followForm.language,
-      purchaseType: 'No sé',
-      interest: 'Solo protocolo',
+      purchaseType: followForm.purchaseType,
+      contactType: followForm.contactType,
+      interest: followForm.contactType === 'Distribuidor' || followForm.contactType === 'Ambos' ? 'Interesado en negocio' : 'Solo protocolo',
       programActive: true,
       programStatus: 'Activo',
-      weeklyEventsActive: followForm.weeklyEventsActive,
-      followUpTime: followForm.followUpTime,
-      reminderMinutes: followForm.reminderMinutes,
-      createdAt: todayIso()
+      timezone: getDeviceTimezone(),
+      createdAt: existing?.createdAt || now.toISOString(),
+      updatedAt: now.toISOString()
     };
-    const id = await db.members.add(member);
-    const saved = { ...member, id };
-    await db.tasks.bulkAdd([...buildFirst30DayTasks(saved, settings.feelGreatLink || ''), ...buildWeeklyMeetingTasks(saved, weeklyEvents.length ? weeklyEvents : defaultWeeklyEvents)]);
-    setFollowForm({ firstName: '', lastName: '', phone: '', language: 'Español', startDate: todayKey(), channel: 'WhatsApp', followUpTime: '10:00', reminderMinutes: 30, weeklyEventsActive: false });
+    await db.transaction('rw', [db.members, db.tasks], async () => {
+      const id = existing?.id ? (await db.members.put(member), existing.id) : await db.members.add(member);
+      const saved = { ...member, id };
+      const openExisting = await db.tasks.where('memberId').equals(id).and((task) => task.program === 'Primeros 30 días' && isTaskOpen(task)).toArray();
+      if (openExisting.length) await db.tasks.bulkDelete(openExisting.map((task) => task.id!).filter(Boolean));
+      const completedDays = new Set((await db.tasks.where('memberId').equals(id).toArray()).filter((task) => task.status === 'Completada').map((task) => task.sequenceDay ?? task.programDay));
+      const nextTasks = buildFirst30DayTasks(saved, settings, templates, weeklyEvents, now).filter((task) => !completedDays.has(task.sequenceDay));
+      const sourceKeys = new Set((await db.tasks.where('memberId').equals(id).toArray()).map((task) => task.sourceKey).filter(Boolean));
+      const missing = nextTasks.filter((task) => !sourceKeys.has(task.sourceKey));
+      if (missing.length) await db.tasks.bulkAdd(missing);
+    });
+    setFollowForm({ firstName: '', lastName: '', phone: '', countryCode: settings.defaultCountryCode, country: settings.defaultCountry, feelGreatReferralLink: '', language: 'Español', startDate: todayKey(), channel: 'WhatsApp', purchaseType: 'Compra individual', contactType: 'Miembro' });
     await loadAll(lang === 'en' ? 'Follow-up started.' : 'Seguimiento activado.');
-  }
-
-  async function importFollowPaste() {
-    const parsed = parsePastedProspects(followImportText, members.map((member) => member.phone), settings.defaultCountryCode);
-    if (!parsed.contacts.length) return setNotice(lang === 'en' ? 'No valid people found.' : 'No se encontraron personas válidas.');
-    for (const contact of parsed.contacts) {
-      await db.members.add({
-        firstName: contact.firstName,
-        lastName: contact.lastName,
-        phone: contact.phone,
-        countryCode: contact.countryCode,
-        country: contact.country,
-        purchaseDate: todayKey(),
-        protocolStartDate: '',
-        preferredChannel: 'WhatsApp',
-        language: 'Español',
-        purchaseType: 'No sé',
-        interest: 'Solo protocolo',
-        programActive: false,
-        programStatus: 'Sin iniciar',
-        weeklyEventsActive: false,
-        followUpTime: '10:00',
-        reminderMinutes: 30,
-        createdAt: todayIso()
-      });
-    }
-    setFollowImportText('');
-    await loadAll(lang === 'en' ? 'People imported. Open each one to activate.' : 'Personas importadas. Abre cada una para activarla.');
-  }
-
-  function buildWeeklyMeetingTasks(member: Member, events: WeeklyEvent[]): FollowUpTask[] {
-    if (!member.id || !member.protocolStartDate || !member.weeklyEventsActive) return [];
-    const result: FollowUpTask[] = [];
-    const start = new Date(`${member.protocolStartDate}T00:00:00`);
-    for (let offset = 0; offset <= 30; offset += 1) {
-      const date = new Date(start);
-      date.setDate(start.getDate() + offset);
-      const dueDate = date.toISOString().slice(0, 10);
-      events.forEach((event) => {
-        if (!event.active || date.getDay() !== event.weekday) return;
-        const language = member.language || 'Español';
-        result.push({
-          memberId: member.id,
-          kind: 'Reunión',
-          program: 'Sistema semanal Golden Team',
-          title: event.name,
-          contactName: memberName(member),
-          phone: member.phone,
-          channel: member.preferredChannel,
-          language,
-          dueDate,
-          dueTime: event.reminderTime,
-          reminderMinutes: 30,
-          message: (language === 'English' ? event.messageEn || event.message : event.message).replaceAll('{{nombre_contacto}}', member.firstName).replaceAll('{{enlace_evento}}', event.link),
-          status: 'Pendiente',
-          createdAt: todayIso(),
-          sourceKey: `member:${member.id}:meeting:${event.name}:${dueDate}`,
-          meetingLink: event.link
-        });
-      });
-    }
-    return result;
   }
 
   async function regenerateFollowTasks(member: Member) {
     if (!member.id) return;
     const existingCompleted = await db.tasks.where('memberId').equals(member.id).and((task) => task.status === 'Completada').toArray();
-    await db.tasks.where('memberId').equals(member.id).and((task) => task.status !== 'Completada').delete();
-    const nextTasks = [...buildFirst30DayTasks(member, settings.feelGreatLink || ''), ...buildWeeklyMeetingTasks(member, weeklyEvents.length ? weeklyEvents : defaultWeeklyEvents)].filter((task) => !existingCompleted.some((done) => done.sourceKey === task.sourceKey));
+    await db.tasks.where('memberId').equals(member.id).and((task) => task.program === 'Primeros 30 días' && isTaskOpen(task)).delete();
+    const nextTasks = buildFirst30DayTasks(member, settings, templates, weeklyEvents).filter((task) => !existingCompleted.some((done) => done.sourceKey === task.sourceKey));
     if (nextTasks.length) await db.tasks.bulkAdd(nextTasks);
     await loadAll(lang === 'en' ? 'Tasks regenerated.' : 'Tareas regeneradas.');
   }
@@ -906,9 +944,21 @@ function App() {
       if (item) await setQueueStatus(item, 'Enviado');
       return;
     }
-    await db.tasks.update(task.id, { status: 'Completada', completedAt: todayIso(), completedChannel: channel });
-    if (task.programDay === 30 && task.memberId) await db.members.update(task.memberId, { programStatus: 'Completado', programActive: false });
-    await loadAll(lang === 'en' ? 'Task completed.' : 'Tarea completada.');
+    const completedAt = todayIso();
+    await db.transaction('rw', [db.tasks, db.members], async () => {
+      await db.tasks.update(task.id!, { status: 'Completada', completedAt, sentConfirmedAt: completedAt, completedChannel: channel || task.attemptedChannel });
+      if ((task.sequenceDay ?? task.programDay) === 30 && task.memberId) {
+        await db.members.update(task.memberId, { programStatus: 'Completado', programActive: false, completedAt, updatedAt: completedAt });
+        const remaining = await db.tasks.where('memberId').equals(task.memberId).and((item) => item.id !== task.id && item.program === 'Primeros 30 días' && isTaskOpen(item)).toArray();
+        if (remaining.length) await Promise.all(remaining.map((item) => db.tasks.update(item.id!, { status: 'Cancelada' as const })));
+      }
+    });
+    setSelectedTaskId(null);
+    setSelectedMemberId(null);
+    setPendingSendTask(null);
+    setShowSendConfirm(false);
+    setActive((task.sequenceDay ?? task.programDay) === 30 ? 'seguimiento' : 'tareas');
+    await loadAll(`${lang === 'en' ? 'Day' : 'Mensaje del Día'} ${task.sequenceDay ?? task.programDay ?? ''} ${lang === 'en' ? 'completed.' : 'completado.'}`);
   }
 
   async function postponeTask(task: FollowUpTask, mode: '30' | 'later' | 'tomorrow' | 'custom') {
@@ -937,6 +987,66 @@ function App() {
     }
     await db.tasks.update(task.id, { dueDate, dueTime, status: 'Pospuesta' });
     await loadAll(lang === 'en' ? 'Task postponed.' : 'Tarea pospuesta.');
+  }
+
+  async function saveTemplate(template: MessageTemplate) {
+    const updated = { ...template, body: templateDraft, message: templateDraft, updatedAt: todayIso(), templateVersion: (template.templateVersion || 1) + 1 };
+    await db.templates.put(updated);
+    const pending = await db.tasks.where('templateKey').equals(template.key || '').and((task) => isTaskOpen(task)).toArray();
+    await Promise.all(pending.map(async (task) => {
+      if (!task.id || !task.memberId) return;
+      const member = await db.members.get(task.memberId);
+      if (!member) return;
+      const meetingSnapshot = (task.sequenceDay === 14 || task.sequenceDay === 22)
+        ? findNextMeeting(await db.weeklyEvents.toArray(), task.dueAt || buildLocalDueAt(task.dueDate, task.dueTime), member.contactType)
+        : task.meetingSnapshot;
+      const resolvedMessage = cleanUnresolvedMessage(resolveFollowUpMessage(updated, member, settings, meetingSnapshot));
+      await db.tasks.update(task.id, { title: updated.internalTitle || updated.name, message: resolvedMessage, resolvedMessage, templateVersion: updated.templateVersion, meetingSnapshot, meetingLink: meetingSnapshot?.link, meetingId: meetingSnapshot?.id });
+    }));
+    setSelectedTemplateKey(null);
+    setTemplateDraft('');
+    await loadAll(lang === 'en' ? 'Template saved.' : 'Plantilla guardada.');
+  }
+
+  async function restoreTemplate(template: MessageTemplate) {
+    setTemplateDraft(template.originalMessage || template.body);
+  }
+
+  function openMeetingEditor(event?: WeeklyEvent) {
+    if (!event) {
+      setSelectedMeetingId('new');
+      setMeetingForm({ name: '', weekday: 1, eventTime: '19:00', link: '', audience: 'Miembros y distribuidores', active: true });
+      return;
+    }
+    setSelectedMeetingId(event.id || null);
+    setMeetingForm({ name: event.name, weekday: event.weekday, eventTime: event.eventTime, link: event.link, audience: event.audience || '', active: event.active });
+  }
+
+  async function saveMeeting(event: FormEvent) {
+    event.preventDefault();
+    if (!meetingForm.name.trim()) return setNotice('Escribe el nombre de la reunión.');
+    const payload: WeeklyEvent = {
+      id: typeof selectedMeetingId === 'number' ? selectedMeetingId : undefined,
+      name: meetingForm.name.trim(),
+      weekday: Number(meetingForm.weekday),
+      eventTime: meetingForm.eventTime,
+      reminderTime: meetingForm.eventTime,
+      link: meetingForm.link.trim(),
+      audience: meetingForm.audience.trim(),
+      message: '',
+      active: meetingForm.active,
+      updatedAt: todayIso()
+    };
+    await db.weeklyEvents.put(payload);
+    setSelectedMeetingId(null);
+    await loadAll(lang === 'en' ? 'Meeting saved.' : 'Reunión guardada.');
+  }
+
+  async function toggleMemberStatus(member: Member, status: Member['programStatus']) {
+    if (!member.id) return;
+    if (member.programStatus === 'Pausado' && status === 'Activo' && !confirm('¿Reanudar manteniendo las fechas originales?')) return;
+    await db.members.update(member.id, { programStatus: status, programActive: status === 'Activo', updatedAt: todayIso() });
+    await loadAll(status === 'Pausado' ? 'Seguimiento pausado.' : 'Seguimiento reanudado.');
   }
 
   function listStats(list: InternalList) {
@@ -988,7 +1098,9 @@ function App() {
     </div>
   );
 
-  const renderHome = () => (
+  const renderHome = () => {
+    const nextFollowTask = [...overdueTasks, ...todayTasks, ...upcomingTasks].find((task) => taskType(task) === 'Seguimiento');
+    return (
     <div className="grid gap-4">
       <button onClick={() => setAccountOpen(true)} className="-mx-4 -mt-[calc(env(safe-area-inset-top)+1rem)] min-w-0 rounded-b-[2rem] bg-brand px-4 pb-7 pt-[calc(env(safe-area-inset-top)+1.5rem)] text-left text-white shadow-soft sm:-mx-6 sm:px-6">
         <div className="flex min-w-0 items-center gap-4">
@@ -1006,25 +1118,25 @@ function App() {
         <Card><p className="text-xs font-bold text-slate-500">{c.tasks}</p><strong className="text-3xl text-ink">{taskBadge}</strong><p className="text-sm text-slate-500">{lang === 'en' ? 'today + overdue' : 'hoy + vencidas'}</p></Card>
       </div>
       <Card>
-        <h2 className="text-lg font-black text-ink">{lang === 'en' ? 'Next actions' : 'Próximas acciones'}</h2>
+        <h2 className="text-lg font-black text-ink">{lang === 'en' ? 'Next follow-up' : 'Próximo seguimiento'}</h2>
         <div className="mt-3 grid gap-2">
-          {[...overdueTasks, ...todayTasks].slice(0, 4).map((task) => (
-            <button key={`${task.id}-${task.sourceKey}`} onClick={() => { setSelectedTaskId(task.id || null); setActive('tareas'); }} className="flex min-w-0 items-center justify-between gap-3 rounded-2xl bg-slate-50 p-3 text-left">
-              <span className="min-w-0"><strong className="block truncate text-sm text-ink">{task.contactName}</strong><span className="block truncate text-xs text-slate-500">{task.title}</span></span>
-              <Badge tone={task.dueDate < todayKey() ? 'bad' : 'warn'}>{shortDate(task.dueDate, lang)}</Badge>
+          {nextFollowTask ? (
+            <button onClick={() => { setSelectedTaskId(nextFollowTask.id || null); setActive('tareas'); }} className="flex min-w-0 items-center justify-between gap-3 rounded-2xl bg-slate-50 p-3 text-left">
+              <span className="min-w-0"><strong className="block truncate text-sm text-ink">{nextFollowTask.contactName}</strong><span className="block truncate text-xs text-slate-500">Día {nextFollowTask.sequenceDay ?? nextFollowTask.programDay ?? '-'} · {nextFollowTask.title} · {shortDate(nextFollowTask.dueDate, lang)} {nextFollowTask.dueTime}</span></span>
+              <Badge tone={nextFollowTask.dueDate < todayKey() ? 'bad' : 'warn'}>{nextFollowTask.dueDate < todayKey() ? 'Vencido' : nextFollowTask.dueDate === todayKey() ? 'Hoy' : 'Próximo'}</Badge>
             </button>
-          ))}
-          {!todayTasks.length && !overdueTasks.length ? <p className="text-sm text-slate-500">{lang === 'en' ? 'No urgent actions right now.' : 'No hay acciones urgentes ahora.'}</p> : null}
+          ) : <p className="text-sm text-slate-500">{lang === 'en' ? 'No active follow-ups right now.' : 'No hay seguimientos activos ahora.'}</p>}
         </div>
       </Card>
     </div>
-  );
+    );
+  };
 
   const renderAccount = () => (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-soft pb-6">
       <div className="mx-auto grid max-w-2xl gap-4 px-4 sm:px-6">
         <Header
-          title={accountPanel ? (accountPanel === 'profile' ? c.profileInfo : accountPanel === 'link' ? c.feelLink : c.language) : c.account}
+          title={accountPanel ? (accountPanel === 'profile' ? c.profileInfo : accountPanel === 'link' ? c.feelLink : accountPanel === 'templates' ? 'Plantillas de mensajes' : accountPanel === 'system' ? 'Sistema y reuniones' : c.language) : c.account}
           subtitle={accountPanel ? displayName(settings) : ''}
           action={settings.profilePhoto ? <img src={settings.profilePhoto} className="h-16 w-16 rounded-full object-cover ring-2 ring-white/20" alt="" /> : <div className="grid h-16 w-16 place-items-center rounded-full bg-white/10 text-xl font-black ring-2 ring-white/20">{initials(displayName(settings))}</div>}
         >
@@ -1035,6 +1147,8 @@ function App() {
             {[
               { id: 'profile' as const, icon: <Camera size={20} />, title: c.profileInfo, value: displayName(settings) },
               { id: 'link' as const, icon: <ExternalLink size={20} />, title: c.feelLink, value: settings.feelGreatLink ? readableUrl(settings.feelGreatLink) : (lang === 'en' ? 'Not set' : 'Sin configurar') },
+              { id: 'templates' as const, icon: <MessageCircle size={20} />, title: 'Plantillas de mensajes', value: `${templates.filter((template) => template.key?.startsWith('followup-day-')).length} plantillas` },
+              { id: 'system' as const, icon: <Bell size={20} />, title: 'Sistema y reuniones', value: `${weeklyEvents.length} reuniones` },
               { id: 'language' as const, icon: <GlobeIcon />, title: c.language, value: lang === 'en' ? 'English' : 'Español' }
             ].map((row) => (
               <button key={row.id} onClick={() => setAccountPanel(row.id)} className="flex min-h-16 w-full min-w-0 items-center gap-3 rounded-2xl px-3 text-left hover:bg-slate-50">
@@ -1078,6 +1192,76 @@ function App() {
               </div>
             </form>
           </Card>
+        ) : null}
+        {accountPanel === 'templates' ? (
+          <div className="grid gap-3">
+            <Card>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="App Store Link"><input className="input" value={settings.appStoreLink || ''} onChange={(event) => saveSettingsPatch({ appStoreLink: event.target.value }, 'Link actualizado.')} placeholder="Pendiente" /></Field>
+                <Field label="Google Play Link"><input className="input" value={settings.googlePlayLink || ''} onChange={(event) => saveSettingsPatch({ googlePlayLink: event.target.value }, 'Link actualizado.')} placeholder="Pendiente" /></Field>
+              </div>
+              {(!settings.appStoreLink || !settings.googlePlayLink) ? <p className="mt-3 text-sm text-amber-700">Faltan enlaces oficiales de la aplicación. Las líneas vacías se eliminarán del mensaje enviado.</p> : null}
+            </Card>
+            {!selectedTemplateKey ? (
+              <Card className="p-2">
+                {templates.filter((template) => template.key?.startsWith('followup-day-')).sort((a, b) => (a.day || 0) - (b.day || 0)).map((template) => (
+                  <button key={template.key} onClick={() => { setSelectedTemplateKey(template.key || null); setTemplateDraft(template.message || template.body); }} className="flex min-h-16 w-full min-w-0 items-center gap-3 rounded-2xl px-3 text-left hover:bg-slate-50">
+                    <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-slate-100 text-sm font-black text-brand">D{template.day}</span>
+                    <span className="min-w-0 flex-1"><strong className="block text-sm text-ink">{template.internalTitle || template.name}</strong><span className="block truncate text-xs text-slate-500">{template.defaultTime === 'now' ? 'Inmediato' : template.defaultTime}</span></span>
+                    <ChevronRight className="shrink-0 text-slate-400" />
+                  </button>
+                ))}
+              </Card>
+            ) : (
+              (() => {
+                const template = templates.find((item) => item.key === selectedTemplateKey);
+                if (!template) return null;
+                return (
+                  <Card>
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div><h2 className="text-lg font-black text-ink">{template.internalTitle || template.name}</h2><p className="text-sm text-slate-500">Día {template.day} · {template.defaultTime === 'now' ? 'Inmediato' : template.defaultTime}</p></div>
+                      <IconButton label="Cerrar" onClick={() => setSelectedTemplateKey(null)}><X /></IconButton>
+                    </div>
+                    <Field label="Mensaje"><textarea className="input min-h-72" value={templateDraft} onChange={(event) => setTemplateDraft(event.target.value)} /></Field>
+                    <p className="mt-3 text-xs text-slate-500">Variables: {(template.availableVariables || []).join(', ')}</p>
+                    <div className="mt-4 grid grid-cols-2 gap-2">
+                      <PrimaryButton onClick={() => saveTemplate(template)}><Check size={16} />Guardar</PrimaryButton>
+                      <SecondaryButton onClick={() => restoreTemplate(template)}><Bell size={16} />Restaurar original</SecondaryButton>
+                    </div>
+                  </Card>
+                );
+              })()
+            )}
+          </div>
+        ) : null}
+        {accountPanel === 'system' ? (
+          <div className="grid gap-3">
+            <Card className="p-2">
+              {weeklyEvents.map((event) => (
+                <button key={event.id || event.name} onClick={() => openMeetingEditor(event)} className="flex min-h-16 w-full min-w-0 items-center gap-3 rounded-2xl px-3 text-left hover:bg-slate-50">
+                  <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl text-sm font-black ${event.active ? 'bg-slate-100 text-brand' : 'bg-slate-100 text-slate-400'}`}>{event.weekday}</span>
+                  <span className="min-w-0 flex-1"><strong className="block text-sm text-ink">{event.name}</strong><span className="block truncate text-xs text-slate-500">{event.eventTime} · {event.audience || 'Audiencia sin definir'}</span></span>
+                  <ChevronRight className="shrink-0 text-slate-400" />
+                </button>
+              ))}
+              <PrimaryButton onClick={() => openMeetingEditor()} className="mt-3 w-full"><Plus size={16} />Añadir reunión</PrimaryButton>
+            </Card>
+            {selectedMeetingId ? (
+              <Card>
+                <form className="grid gap-3" onSubmit={saveMeeting}>
+                  <Field label="Nombre"><input className="input" value={meetingForm.name} onChange={(event) => setMeetingForm((current) => ({ ...current, name: event.target.value }))} /></Field>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="Día"><select className="input" value={meetingForm.weekday} onChange={(event) => setMeetingForm((current) => ({ ...current, weekday: Number(event.target.value) }))}><option value={1}>Lunes</option><option value={2}>Martes</option><option value={3}>Miércoles</option><option value={4}>Jueves</option><option value={5}>Viernes</option><option value={6}>Sábado</option><option value={0}>Domingo</option></select></Field>
+                    <Field label="Hora"><input className="input" type="time" value={meetingForm.eventTime} onChange={(event) => setMeetingForm((current) => ({ ...current, eventTime: event.target.value }))} /></Field>
+                  </div>
+                  <Field label="Enlace"><input className="input" value={meetingForm.link} onChange={(event) => setMeetingForm((current) => ({ ...current, link: event.target.value }))} /></Field>
+                  <Field label="Audiencia"><input className="input" value={meetingForm.audience} onChange={(event) => setMeetingForm((current) => ({ ...current, audience: event.target.value }))} /></Field>
+                  <label className="flex items-center gap-2 rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700"><input type="checkbox" checked={meetingForm.active} onChange={(event) => setMeetingForm((current) => ({ ...current, active: event.target.checked }))} />Activa</label>
+                  <div className="grid grid-cols-2 gap-2"><PrimaryButton type="submit"><Check size={16} />Guardar</PrimaryButton><SecondaryButton onClick={() => setSelectedMeetingId(null)}><X size={16} />Cancelar</SecondaryButton></div>
+                </form>
+              </Card>
+            ) : null}
+          </div>
         ) : null}
         {accountPanel === 'language' ? (
           <Card>
@@ -1302,31 +1486,30 @@ function App() {
       </div>
       <Card>
         <form className="grid gap-3" onSubmit={saveFollowPerson}>
-          <h2 className="text-lg font-black text-ink">{c.addPeople}</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-black text-ink">{c.addPeople}</h2>
+            <SecondaryButton onClick={() => importFromDeviceContacts('follow')}><Phone size={16} />Seleccionar desde Contactos</SecondaryButton>
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label={c.name}><input className="input" value={followForm.firstName} onChange={(event) => setFollowForm((current) => ({ ...current, firstName: event.target.value }))} /></Field>
-            <Field label="Apellido"><input className="input" value={followForm.lastName} onChange={(event) => setFollowForm((current) => ({ ...current, lastName: event.target.value }))} /></Field>
+            <Field label="Apellido opcional"><input className="input" value={followForm.lastName} onChange={(event) => setFollowForm((current) => ({ ...current, lastName: event.target.value }))} /></Field>
             <Field label={c.phone}><input className="input" value={followForm.phone} onChange={(event) => setFollowForm((current) => ({ ...current, phone: event.target.value }))} /></Field>
+            <Field label="País o código de país"><input className="input" value={followForm.countryCode} onChange={(event) => setFollowForm((current) => ({ ...current, countryCode: event.target.value }))} /></Field>
+            <Field label="Enlace personal de Feel Great" helper={!followForm.feelGreatReferralLink ? 'Puedes continuar si todavía no lo tienes, con confirmación.' : undefined}><input className="input" value={followForm.feelGreatReferralLink} onChange={(event) => setFollowForm((current) => ({ ...current, feelGreatReferralLink: event.target.value }))} placeholder="https://..." /></Field>
             <Field label={c.language}><select className="input" value={followForm.language} onChange={(event) => setFollowForm((current) => ({ ...current, language: event.target.value as ContactLanguage }))}><option>Español</option><option>English</option></select></Field>
             <Field label="Fecha de inicio"><input className="input" type="date" value={followForm.startDate} onChange={(event) => setFollowForm((current) => ({ ...current, startDate: event.target.value }))} /></Field>
             <Field label={c.channel}><select className="input" value={followForm.channel} onChange={(event) => setFollowForm((current) => ({ ...current, channel: event.target.value as Exclude<Channel, 'Ambos'> }))}><option>WhatsApp</option><option>SMS</option></select></Field>
-            <Field label="Hora predeterminada"><input className="input" type="time" value={followForm.followUpTime} onChange={(event) => setFollowForm((current) => ({ ...current, followUpTime: event.target.value }))} /></Field>
-            <Field label="Recordatorio"><select className="input" value={followForm.reminderMinutes} onChange={(event) => setFollowForm((current) => ({ ...current, reminderMinutes: Number(event.target.value) as 15 | 30 }))}><option value={30}>30 minutos antes</option><option value={15}>15 minutos antes</option></select></Field>
+            <Field label="Tipo de compra"><select className="input" value={followForm.purchaseType} onChange={(event) => setFollowForm((current) => ({ ...current, purchaseType: event.target.value as Member['purchaseType'] }))}><option>Compra individual</option><option>Suscripción</option><option>Entrega física</option></select></Field>
+            <Field label="Tipo de contacto"><select className="input" value={followForm.contactType} onChange={(event) => setFollowForm((current) => ({ ...current, contactType: event.target.value as ContactType }))}><option>Miembro</option><option>Distribuidor</option><option>Ambos</option></select></Field>
           </div>
-          <label className="flex items-center gap-2 rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700"><input type="checkbox" checked={followForm.weeklyEventsActive} onChange={(event) => setFollowForm((current) => ({ ...current, weeklyEventsActive: event.target.checked }))} />Recibir recordatorios del sistema semanal Golden Team</label>
-          <PrimaryButton type="submit"><Plus size={17} />Activar programa de 30 días</PrimaryButton>
+          <PrimaryButton type="submit"><Plus size={17} />Iniciar seguimiento de 30 días</PrimaryButton>
         </form>
       </Card>
       <Card>
         <h2 className="text-lg font-black text-ink">{c.importContact}</h2>
         <div className="mt-3 grid gap-3">
-          <SecondaryButton onClick={() => importFromDeviceContacts('follow')}><Phone size={16} />{lang === 'en' ? 'Select from phone' : 'Seleccionar desde teléfono'}</SecondaryButton>
-          <div className="grid grid-cols-2 gap-2">
-            <SecondaryButton onClick={() => setNotice(lang === 'en' ? 'VCF import is available by pasting exported contacts for now.' : 'Por ahora importa VCF pegando los contactos exportados.')}><Upload size={16} />VCF</SecondaryButton>
-            <SecondaryButton onClick={() => setNotice(lang === 'en' ? 'CSV can be pasted below with name and phone.' : 'Puedes pegar CSV abajo con nombre y teléfono.')}><Upload size={16} />CSV</SecondaryButton>
-          </div>
-          <Field label={lang === 'en' ? 'Paste contacts' : 'Pegar contactos'}><textarea className="input min-h-24" value={followImportText} onChange={(event) => setFollowImportText(event.target.value)} placeholder={lang === 'en' ? 'Maria 4075551234' : 'María 4075551234'} /></Field>
-          <SecondaryButton onClick={importFollowPaste}><Upload size={16} />{lang === 'en' ? 'Import to configure individually' : 'Importar para configurar individualmente'}</SecondaryButton>
+          <SecondaryButton onClick={() => importFromDeviceContacts('follow')}><Phone size={16} />Seleccionar desde Contactos</SecondaryButton>
+          <SecondaryButton onClick={() => setNotice('Completa el formulario manual de Añadir persona.')}><Plus size={16} />Añadir manualmente</SecondaryButton>
         </div>
       </Card>
       <div className="grid gap-3">
@@ -1340,12 +1523,12 @@ function App() {
   const renderMemberCard = (member: Member) => {
     const day = currentProgramDay(member.protocolStartDate);
     const progress = day === null ? 0 : Math.min(100, Math.round((Math.min(day, 30) / 30) * 100));
-    const pending = tasks.filter((task) => task.memberId === member.id && task.status !== 'Completada').sort((a, b) => `${a.dueDate} ${a.dueTime}`.localeCompare(`${b.dueDate} ${b.dueTime}`))[0];
+    const pending = tasks.filter((task) => task.memberId === member.id && isTaskOpen(task)).sort((a, b) => `${a.dueDate} ${a.dueTime}`.localeCompare(`${b.dueDate} ${b.dueTime}`))[0];
     return (
       <button key={member.id} onClick={() => setSelectedMemberId(member.id!)} className="min-w-0 rounded-[1.4rem] border border-slate-100 bg-white p-4 text-left shadow-sm">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0"><h3 className="truncate text-lg font-black text-ink">{memberName(member)}</h3><p className="text-sm text-slate-500">{member.phone} · {member.language || 'Español'} · {member.preferredChannel}</p></div>
-          <Badge tone={member.programStatus === 'Completado' ? 'good' : 'blue'}>{member.programStatus === 'Completado' ? '100%' : `Día ${Math.min(day ?? 0, 30)} de 30`}</Badge>
+          <Badge tone={member.programStatus === 'Completado' ? 'good' : member.programStatus === 'Pausado' ? 'warn' : 'blue'}>{member.programStatus === 'Completado' ? '100%' : member.programStatus === 'Pausado' ? 'Pausado' : `Día ${Math.min(day ?? 0, 30)} de 30`}</Badge>
         </div>
         <div className="mt-3 h-2 rounded-full bg-slate-100"><div className="h-full rounded-full bg-gold" style={{ width: `${progress}%` }} /></div>
         <p className="mt-2 text-sm text-slate-500">{pending ? `${pending.title} · ${shortDate(pending.dueDate, lang)} ${pending.dueTime}` : 'Sin tareas pendientes'}</p>
@@ -1355,7 +1538,7 @@ function App() {
 
   const renderMemberDetail = (member: Member) => {
     const memberTasks = tasks.filter((task) => task.memberId === member.id).sort((a, b) => `${a.dueDate} ${a.dueTime}`.localeCompare(`${b.dueDate} ${b.dueTime}`));
-    const nextTask = memberTasks.find((task) => task.status !== 'Completada');
+    const nextTask = memberTasks.find((task) => isTaskOpen(task));
     const day = currentProgramDay(member.protocolStartDate);
     const progress = day === null ? 0 : Math.min(100, Math.round((Math.min(day, 30) / 30) * 100));
     return (
@@ -1366,12 +1549,17 @@ function App() {
           <Card>
             <div className="flex items-center justify-between gap-3"><div><p className="text-sm text-slate-500">Progreso</p><h2 className="text-3xl font-black text-ink">{member.programStatus === 'Completado' ? '100%' : `${progress}%`}</h2></div><Badge tone="blue">Día {Math.min(day ?? 0, 30)} de 30</Badge></div>
             <div className="mt-3 h-3 rounded-full bg-slate-100"><div className="h-full rounded-full bg-gold" style={{ width: `${progress}%` }} /></div>
-            <div className="mt-4 flex flex-wrap gap-2"><SecondaryButton onClick={() => regenerateFollowTasks(member)}><Bell size={16} />Regenerar tareas</SecondaryButton>{member.programStatus === 'Completado' ? <SecondaryButton onClick={() => db.members.update(member.id!, { programStatus: 'Pausado' }).then(() => loadAll('Archivado.'))}>Archivar</SecondaryButton> : null}</div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <SecondaryButton onClick={() => regenerateFollowTasks(member)}><Bell size={16} />Regenerar tareas</SecondaryButton>
+              {member.programStatus === 'Activo' ? <SecondaryButton onClick={() => toggleMemberStatus(member, 'Pausado')}>Pausar</SecondaryButton> : null}
+              {member.programStatus === 'Pausado' ? <SecondaryButton onClick={() => toggleMemberStatus(member, 'Activo')}>Reanudar</SecondaryButton> : null}
+              {member.programStatus === 'Completado' ? <SecondaryButton onClick={() => { setFollowForm((current) => ({ ...current, firstName: member.firstName, lastName: member.lastName || '', phone: member.phone, countryCode: member.countryCode, country: member.country || settings.defaultCountry, feelGreatReferralLink: member.feelGreatReferralLink || '', channel: member.preferredChannel, purchaseType: member.purchaseType, contactType: member.contactType || 'Miembro', startDate: todayKey() })); setSelectedMemberId(null); }}>Iniciar nuevo ciclo</SecondaryButton> : null}
+            </div>
           </Card>
           {nextTask ? renderTaskDetail(nextTask) : <Card><p className="text-sm text-slate-500">No hay próxima tarea pendiente.</p></Card>}
           <Card>
             <h2 className="text-lg font-black text-ink">Tareas</h2>
-            <div className="mt-3 grid gap-2">{memberTasks.map((task) => <button key={task.id} onClick={() => setSelectedTaskId(task.id || null)} className="rounded-2xl bg-slate-50 p-3 text-left"><strong className="block text-sm text-ink">{task.title}</strong><span className="text-xs text-slate-500">{task.kind} · {shortDate(task.dueDate, lang)} {task.dueTime} · {task.status}</span></button>)}</div>
+            <div className="mt-3 grid gap-2">{memberTasks.map((task) => <button key={task.id} onClick={() => setSelectedTaskId(task.id || null)} className="rounded-2xl bg-slate-50 p-3 text-left"><strong className="block text-sm text-ink">{task.title}</strong><span className="text-xs text-slate-500">Día {task.sequenceDay ?? task.programDay ?? '-'} · {shortDate(task.dueDate, lang)} {task.dueTime} · {task.status}</span></button>)}</div>
           </Card>
         </div>
       </div>
@@ -1401,24 +1589,35 @@ function App() {
     );
   };
 
-  const renderTaskDetail = (task: FollowUpTask, modal = false) => (
-    <Card className="grid gap-4">
-      {modal ? <button onClick={() => setSelectedTaskId(null)} className="inline-flex w-fit items-center gap-2 text-sm font-black text-brand"><ChevronLeft size={18} />{c.tasks}</button> : null}
-      <div><h2 className="text-xl font-black text-ink">{task.title}</h2><p className="text-sm text-slate-500">{task.contactName} · {task.phone} · {task.language || 'Español'}</p></div>
-      <div className="rounded-2xl bg-slate-50 p-3"><p className="whitespace-pre-wrap text-sm text-slate-700">{task.message}</p>{task.meetingLink ? <button onClick={() => window.open(task.meetingLink, '_blank', 'noopener,noreferrer')} className="mt-3 inline-flex items-center gap-2 text-sm font-black text-brand"><ExternalLink size={16} />Zoom</button> : null}</div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {task.queueItemId ? <PrimaryButton onClick={() => { const item = queue.find((candidate) => candidate.id === task.queueItemId); if (item) { setActiveCampaignId(item.campaignId); setActive('difusion'); setSelectedTaskId(null); } }}><Send size={16} />Abrir cola</PrimaryButton> : null}
-        <PrimaryButton onClick={() => openWhatsAppFor(task)}><MessageCircle size={16} />WhatsApp</PrimaryButton>
-        <SecondaryButton onClick={() => openSmsFor(task)}><Phone size={16} />SMS</SecondaryButton>
-        <SecondaryButton onClick={() => copyMessage(task.message)}><Copy size={16} />Copiar</SecondaryButton>
-        <SecondaryButton onClick={() => completeTask(task)}><Check size={16} />Completar</SecondaryButton>
-        <SecondaryButton onClick={() => postponeTask(task, '30')}>30 min</SecondaryButton>
-        <SecondaryButton onClick={() => postponeTask(task, 'later')}>Más tarde</SecondaryButton>
-        <SecondaryButton onClick={() => postponeTask(task, 'tomorrow')}>Mañana 10:00</SecondaryButton>
-        <SecondaryButton onClick={() => postponeTask(task, 'custom')}>Elegir fecha</SecondaryButton>
-      </div>
-    </Card>
-  );
+  const renderTaskDetail = (task: FollowUpTask, modal = false) => {
+    const member = task.memberId ? members.find((item) => item.id === task.memberId) : null;
+    const template = task.templateKey ? templates.find((item) => item.key === task.templateKey) : null;
+    const refreshedMeeting = member && template && isTaskOpen(task) && (task.sequenceDay === 14 || task.sequenceDay === 22)
+      ? findNextMeeting(weeklyEvents, task.dueAt || buildLocalDueAt(task.dueDate, task.dueTime), member.contactType)
+      : task.meetingSnapshot;
+    const displayMessage = member && template && isTaskOpen(task)
+      ? cleanUnresolvedMessage(resolveFollowUpMessage(template, member, settings, refreshedMeeting))
+      : task.resolvedMessage || task.message;
+    const displayTask = { ...task, message: displayMessage, meetingSnapshot: refreshedMeeting, meetingLink: refreshedMeeting?.link || task.meetingLink };
+    return (
+      <Card className="grid gap-4">
+        {modal ? <button onClick={() => setSelectedTaskId(null)} className="inline-flex w-fit items-center gap-2 text-sm font-black text-brand"><ChevronLeft size={18} />{c.tasks}</button> : null}
+        <div><h2 className="text-xl font-black text-ink">{task.title}</h2><p className="text-sm text-slate-500">{task.contactName} · Día {task.sequenceDay ?? task.programDay ?? '-'} · {task.phone}</p></div>
+        <div className="rounded-2xl bg-slate-50 p-3"><p className="whitespace-pre-wrap text-sm text-slate-700">{displayMessage}</p>{displayTask.meetingLink ? <button onClick={() => window.open(displayTask.meetingLink, '_blank', 'noopener,noreferrer')} className="mt-3 inline-flex items-center gap-2 text-sm font-black text-brand"><ExternalLink size={16} />Zoom</button> : null}</div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {task.queueItemId ? <PrimaryButton onClick={() => { const item = queue.find((candidate) => candidate.id === task.queueItemId); if (item) { setActiveCampaignId(item.campaignId); setActive('difusion'); setSelectedTaskId(null); } }}><Send size={16} />Abrir cola</PrimaryButton> : null}
+          {isTaskOpen(task) ? <PrimaryButton onClick={() => openWhatsAppFor(displayTask)}><MessageCircle size={16} />WhatsApp</PrimaryButton> : null}
+          {isTaskOpen(task) ? <SecondaryButton onClick={() => openSmsFor(displayTask)}><Phone size={16} />SMS</SecondaryButton> : null}
+          <SecondaryButton onClick={() => copyMessage(displayMessage)}><Copy size={16} />Copiar</SecondaryButton>
+          {isTaskOpen(task) ? <SecondaryButton onClick={() => completeTask(displayTask)}><Check size={16} />Marcar como completado</SecondaryButton> : null}
+          {isTaskOpen(task) ? <SecondaryButton onClick={() => postponeTask(task, '30')}>30 min</SecondaryButton> : null}
+          {isTaskOpen(task) ? <SecondaryButton onClick={() => postponeTask(task, 'later')}>Más tarde</SecondaryButton> : null}
+          {isTaskOpen(task) ? <SecondaryButton onClick={() => postponeTask(task, 'tomorrow')}>Mañana 10:00</SecondaryButton> : null}
+          {isTaskOpen(task) ? <SecondaryButton onClick={() => postponeTask(task, 'custom')}>Elegir fecha</SecondaryButton> : null}
+        </div>
+      </Card>
+    );
+  };
 
   const currentView = active === 'inicio' ? renderHome() : active === 'difusion' ? renderBroadcast() : active === 'seguimiento' ? renderFollowUps() : renderTasks();
 
@@ -1443,6 +1642,21 @@ function App() {
         </div>
       </nav>
       {accountOpen ? renderAccount() : null}
+      {showSendConfirm && pendingSendTask ? (
+        <div className="fixed inset-0 z-[60] grid place-items-end bg-black/40 p-4 sm:place-items-center">
+          <Card className="w-full max-w-md">
+            <h2 className="text-lg font-black text-ink">¿Enviaste este mensaje?</h2>
+            <p className="mt-2 text-sm text-slate-500">Confirma solo si el mensaje fue enviado en {pendingSendTask.channel}.</p>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <PrimaryButton onClick={() => {
+                const task = tasks.find((item) => item.id === pendingSendTask.taskId);
+                if (task) completeTask(task, pendingSendTask.channel);
+              }}><Check size={16} />Sí, marcar como completado</PrimaryButton>
+              <SecondaryButton onClick={() => { setShowSendConfirm(false); setPendingSendTask(null); }}>Todavía no</SecondaryButton>
+            </div>
+          </Card>
+        </div>
+      ) : null}
     </div>
   );
 }

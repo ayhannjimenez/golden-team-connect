@@ -3,12 +3,19 @@ import type { Contact } from '../types';
 export interface MessageContext {
   userName?: string;
   feelGreatLink?: string;
+  firstName?: string;
+  feelGreatReferralLink?: string;
   location?: string;
   eventLink?: string;
+  meetingName?: string;
+  meetingDateTime?: string;
+  meetingLink?: string;
+  appStoreLink?: string;
+  googlePlayLink?: string;
 }
 
 export function personalizeMessage(template: string, contact: Contact, listName = '', context: MessageContext = {}): string {
-  return template
+  return cleanUnresolvedMessage(template
     .replaceAll('{{nombre}}', contact.firstName)
     .replaceAll('{{apellido}}', contact.lastName)
     .replaceAll('{{pais}}', contact.country)
@@ -16,11 +23,40 @@ export function personalizeMessage(template: string, contact: Contact, listName 
     .replaceAll('{{lista}}', listName)
     .replaceAll('{{nombre_usuario}}', context.userName || '')
     .replaceAll('{{feelgreat_link}}', context.feelGreatLink || '')
+    .replaceAll('{{firstName}}', context.firstName || contact.firstName)
+    .replaceAll('{{feelGreatReferralLink}}', context.feelGreatReferralLink || '')
     .replaceAll('{{ubicacion}}', context.location || '')
     .replaceAll('{{enlace_evento}}', context.eventLink || '')
+    .replaceAll('{{meetingName}}', context.meetingName || '')
+    .replaceAll('{{meetingDateTime}}', context.meetingDateTime || '')
+    .replaceAll('{{meetingLink}}', context.meetingLink || '')
+    .replaceAll('{{appStoreLink}}', context.appStoreLink || '')
+    .replaceAll('{{googlePlayLink}}', context.googlePlayLink || '')
     .replaceAll('{{nombre_contacto}}', contact.firstName)
     .replaceAll('{{apellido_contacto}}', contact.lastName)
-    .replaceAll('{{pais_contacto}}', contact.country);
+    .replaceAll('{{pais_contacto}}', contact.country));
+}
+
+export function cleanUnresolvedMessage(message: string): string {
+  const lines = message.split('\n');
+  const result: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/\{\{[^}]+}}/.test(line)) {
+      const previous = result[result.length - 1]?.trim().toLowerCase();
+      if (previous === 'iphone:' || previous === 'android:') result.pop();
+      continue;
+    }
+    if (!line.trim()) {
+      const previous = result[result.length - 1]?.trim().toLowerCase();
+      if (previous === 'iphone:' || previous === 'android:') {
+        result.pop();
+        continue;
+      }
+    }
+    result.push(line);
+  }
+  return result.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 export function messageNeedsFeelGreatLink(message: string): boolean {

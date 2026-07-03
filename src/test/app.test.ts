@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { Contact, QueueItem } from '../types';
+import type { Contact, MessageTemplate, QueueItem } from '../types';
 import { GOLDEN_TEAM_ACCESS_CODE, isValidAccessCode, normalizeAccessCode } from '../accessConfig';
 import { validateBackup } from '../utils/backup';
 import { exportContactsCsv, parseContactsCsv } from '../utils/csv';
-import { buildFirst30DayTasks, buildRenewalTask, currentProgramDay, defaultWeeklyEvents, first30DaySteps, isBusinessEligible, parsePastedProspects, renewalMessageForPurchaseType } from '../utils/followup';
-import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, messageNeedsFeelGreatLink, personalizeMessage } from '../utils/messages';
+import { addCalendarDays, buildFirst30DayTasks, buildRenewalTask, currentProgramDay, defaultFollowUpTemplates, defaultWeeklyEvents, findNextMeeting, isBusinessEligible, isTaskOpen, localDateKey, parsePastedProspects, renewalMessageForPurchaseType, resolveFollowUpMessage } from '../utils/followup';
+import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, cleanUnresolvedMessage, messageNeedsFeelGreatLink, personalizeMessage } from '../utils/messages';
 import { isDuplicatePhone, normalizePhone } from '../utils/phone';
 
 const contact: Contact = {
@@ -85,26 +85,35 @@ describe('miembros y programa de 30 dias', () => {
     country: 'Estados Unidos',
     purchaseDate: '2026-06-01',
     protocolStartDate: '2026-06-10',
+    feelGreatReferralLink: 'https://ufeelgreat.com/c/ana',
     preferredChannel: 'WhatsApp' as const,
-    purchaseType: 'Compra única' as const,
+    purchaseType: 'Compra individual' as const,
+    contactType: 'Miembro' as const,
     interest: 'Interesado en negocio' as const,
     programActive: true,
     programStatus: 'Activo' as const,
+    timezone: 'America/New_York',
     createdAt: '2026-06-01T00:00:00.000Z'
   };
 
   it('genera todas las tareas del programa desde la fecha de inicio', () => {
-    const tasks = buildFirst30DayTasks(member, 'https://ufeelgreat.com/c/123456');
-    expect(tasks).toHaveLength(first30DaySteps.length);
-    expect(tasks[0].dueDate).toBe('2026-06-10');
-    expect(tasks.find((task) => task.programDay === 30)?.dueDate).toBe('2026-07-10');
-    expect(tasks.every((task) => task.dueTime === '10:00')).toBe(true);
+    const tasks = buildFirst30DayTasks(member, { appStoreLink: '', googlePlayLink: '' }, defaultFollowUpTemplates(new Date('2026-06-01T12:00:00')), defaultWeeklyEvents, new Date('2026-06-10T08:05:00'));
+    expect(tasks).toHaveLength(10);
+    expect(tasks.map((task) => task.sequenceDay)).toEqual([0, 2, 4, 7, 10, 14, 18, 22, 26, 30]);
+    expect(tasks[0].dueDate).toBe(localDateKey(new Date('2026-06-10T08:05:00')));
+    expect(tasks[0].dueTime).toBe('08:05');
+    expect(tasks.find((task) => task.sequenceDay === 2)?.dueTime).toBe('09:15');
+    expect(tasks.find((task) => task.sequenceDay === 4)?.dueTime).toBe('11:30');
+    expect(tasks.find((task) => task.sequenceDay === 14)?.dueTime).toBe('17:45');
+    expect(tasks.find((task) => task.sequenceDay === 22)?.dueTime).toBe('18:15');
+    expect(tasks.find((task) => task.sequenceDay === 30)?.dueDate).toBe('2026-07-10');
+    expect(tasks.some((task) => [21, 25, 28].includes(task.sequenceDay || -1))).toBe(false);
   });
 
   it('calcula dia actual y mensaje segun tipo de compra', () => {
     expect(currentProgramDay('2026-06-10', new Date('2026-06-18T12:00:00.000Z'))).toBe(8);
-    expect(renewalMessageForPurchaseType('Autosuscripción')).toContain('autosuscripción');
-    expect(renewalMessageForPurchaseType('Compra única', 'https://ufeelgreat.com/c/123456')).toContain('https://ufeelgreat.com/c/123456');
+    expect(renewalMessageForPurchaseType('Suscripción')).toContain('suscripción');
+    expect(renewalMessageForPurchaseType('Compra individual', 'https://ufeelgreat.com/c/123456')).toContain('https://ufeelgreat.com/c/123456');
     expect(renewalMessageForPurchaseType('No sé')).toContain('verificarlo');
   });
 
@@ -115,6 +124,60 @@ describe('miembros y programa de 30 dias', () => {
     expect(isBusinessEligible({ interest: 'Solo protocolo' })).toBe(false);
     expect(defaultWeeklyEvents).toHaveLength(4);
     expect(defaultWeeklyEvents[0].link).toContain('88673512174');
+  });
+
+  it('resuelve variables nuevas con enlace individual y limpia enlaces de apps vacios', () => {
+    const templates = defaultFollowUpTemplates(new Date('2026-06-01T12:00:00'));
+    const day4 = templates.find((template) => template.key === 'followup-day-4')!;
+    const message = resolveFollowUpMessage(day4, member, { appStoreLink: '', googlePlayLink: '' });
+    expect(message).toContain('Ana');
+    expect(message).toContain('https://ufeelgreat.com/c/ana');
+    expect(message).not.toContain('{{appStoreLink}}');
+    expect(message).not.toContain('iPhone:');
+    expect(cleanUnresolvedMessage('iPhone:\n{{appStoreLink}}\n\nHola')).toBe('Hola');
+  });
+
+  it('selecciona reuniones futuras para dia 14 y dia 22 por audiencia', () => {
+    const dueAt = '2026-06-24T17:45';
+    const meeting = findNextMeeting(defaultWeeklyEvents, dueAt, 'Miembro');
+    expect(meeting?.name).toBe('Presentación de Negocio');
+    expect(meeting?.link).toContain('6421915226');
+    const distributorMeeting = findNextMeeting(defaultWeeklyEvents, dueAt, 'Distribuidor');
+    expect(distributorMeeting?.name).toBe('Presentación de Negocio');
+    const none = findNextMeeting(defaultWeeklyEvents.map((event) => ({ ...event, active: false })), dueAt, 'Miembro');
+    expect(none).toBeUndefined();
+  });
+
+  it('evita seleccionar reuniones pasadas y suma dias de calendario local', () => {
+    expect(addCalendarDays('2026-06-10', 30)).toBe('2026-07-10');
+    const meeting = findNextMeeting(defaultWeeklyEvents, '2026-06-23T22:00', 'Miembro');
+    expect(meeting?.dateTime).not.toContain('Jun 23');
+  });
+
+  it('mantiene sourceKey unico y permite detectar pendientes despues de completar', () => {
+    const tasks = buildFirst30DayTasks(member, {}, defaultFollowUpTemplates(), defaultWeeklyEvents, new Date('2026-06-10T08:00:00'));
+    expect(new Set(tasks.map((task) => task.sourceKey)).size).toBe(10);
+    expect(isTaskOpen({ status: 'Pendiente' })).toBe(true);
+    expect(isTaskOpen({ status: 'Completada' })).toBe(false);
+    expect(isTaskOpen({ status: 'Cancelada' })).toBe(false);
+  });
+
+  it('edicion global de plantilla puede actualizar pendientes sin cambiar completadas', () => {
+    const template: MessageTemplate = defaultFollowUpTemplates()[1];
+    const edited = { ...template, body: 'Hola {{firstName}}, nuevo texto', message: 'Hola {{firstName}}, nuevo texto', templateVersion: 2 };
+    const pending = buildFirst30DayTasks(member, {}, [edited], defaultWeeklyEvents, new Date('2026-06-10T08:00:00')).find((task) => task.sequenceDay === 2)!;
+    const completed = { ...pending, status: 'Completada' as const, message: 'Mensaje histórico' };
+    expect(pending.message).toContain('nuevo texto');
+    expect(completed.message).toBe('Mensaje histórico');
+  });
+
+  it('modela confirmacion manual y cierre de dia 30 sin envio automatico', () => {
+    const day30 = buildFirst30DayTasks(member, {}, defaultFollowUpTemplates(), defaultWeeklyEvents, new Date('2026-06-10T08:00:00')).find((task) => task.sequenceDay === 30)!;
+    const opened = { ...day30, attemptedAt: '2026-07-10T10:00:00.000Z', attemptedChannel: 'WhatsApp' as const };
+    const completed = { ...opened, status: 'Completada' as const, sentConfirmedAt: '2026-07-10T10:05:00.000Z', completedAt: '2026-07-10T10:05:00.000Z' };
+    expect(opened.status).toBe('Pendiente');
+    expect(completed.sentConfirmedAt).toBeTruthy();
+    expect(day30.sequenceDay).toBe(30);
   });
 });
 

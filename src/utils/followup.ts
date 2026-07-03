@@ -1,101 +1,145 @@
-import type { Contact, ContactLanguage, FollowUpTask, Member, MemberPurchaseType, WeeklyEvent } from '../types';
+import type { AppSettings, Contact, ContactLanguage, ContactType, FollowUpTask, MeetingSnapshot, Member, MemberPurchaseType, MessageTemplate, WeeklyEvent } from '../types';
+import { cleanUnresolvedMessage, personalizeMessage } from './messages';
 import { normalizePhone } from './phone';
 
-export const DEFAULT_TASK_TIME = '10:00';
 export const FIRST_30_DAYS_PROGRAM = 'Primeros 30 días';
+export const DEFAULT_TIMEZONE = 'America/New_York';
 
 export interface FollowUpStep {
   day: number;
+  key: string;
   title: string;
+  defaultTime: string;
   message: string;
-  goal: string;
+  goal?: string;
 }
+
+export const followUpVariables = ['{{firstName}}', '{{feelGreatReferralLink}}', '{{meetingName}}', '{{meetingDateTime}}', '{{meetingLink}}', '{{appStoreLink}}', '{{googlePlayLink}}'];
 
 export const first30DaySteps: FollowUpStep[] = [
   {
     day: 0,
-    title: 'Bienvenida y comienzo',
-    message: 'Hola, {{nombre_contacto}}. Me alegra mucho poder acompañarte durante estos primeros 30 días. Quería confirmar que ya tienes todo listo y saber si pudiste comenzar. Cualquier duda que tengas, estoy aquí para ayudarte.',
-    goal: 'Confirmar recepción, establecer fecha de inicio y abrir comunicación.'
+    key: 'followup-day-0',
+    title: 'Bienvenida',
+    defaultTime: 'now',
+    message: '¡Hola, {{firstName}}! Quiero felicitarte por haber tomado la decisión de invertir en tu salud.\n\nHoy comienza una etapa nueva, y durante estos próximos 30 días estaré aquí para ayudarte a entender el protocolo, crear una buena rutina y aprovechar esta oportunidad al máximo.\n\nCuando recibas tu caja, déjame saber. No tienes que hacer este proceso solo.'
   },
   {
     day: 2,
-    title: 'Primeras 48 horas',
-    message: 'Hola, {{nombre_contacto}}. Quería saber cómo te ha ido durante estas primeras 48 horas. ¿Pudiste comenzar bien o te surgió alguna duda con la forma de utilizarlo?',
-    goal: 'Comprobar que comenzó y detectar confusión antes de que abandone.'
+    key: 'followup-day-2',
+    title: 'Definir propósito',
+    defaultTime: '09:15',
+    message: '{{firstName}}, todo proceso cobra más fuerza cuando recordamos por qué comenzamos.\n\n¿Qué es lo principal que te gustaría mejorar durante estos próximos 30 días?\n\nPuede ser tu energía, tus antojos, tu relación con la comida o simplemente comenzar a sentirte mejor.\n\nCuéntame cuál es tu meta principal.'
   },
   {
     day: 4,
-    title: 'Experiencia inicial',
-    message: 'Hola, {{nombre_contacto}}. Ya llevas varios días comenzando tu rutina. ¿Qué ha sido lo primero que has notado o qué es lo que más te ha gustado hasta ahora?',
-    goal: 'Provocar respuesta, identificar experiencia positiva y aumentar compromiso.'
+    key: 'followup-day-4',
+    title: 'Aplicación y enlace personal',
+    defaultTime: '11:30',
+    message: '¡Espero que estés teniendo un excelente día, {{firstName}}!\n\nDescarga la aplicación Feel Great – Fasting Coach para registrar tu Unimate, Balance, comidas y periodo de ayuno. Te ayudará a convertir tu nueva decisión en un hábito.\n\niPhone:\n{{appStoreLink}}\n\nAndroid:\n{{googlePlayLink}}\n\nTambién tienes tu propio enlace para compartir Feel Great:\n\n{{feelGreatReferralLink}}\n\nCuando alguien compra utilizando tu enlace, puedes recibir $10 en crédito de producto. Así puedes ayudar a otra persona y acumular crédito para tus próximas órdenes.'
   },
   {
     day: 7,
-    title: 'Primera semana',
-    message: 'Hola, {{nombre_contacto}}. Ya completaste tu primera semana. ¿Cómo te has sentido y qué parte de la rutina se te ha hecho más fácil o más difícil mantener?',
-    goal: 'Evaluar consistencia e identificar obstáculos.'
+    key: 'followup-day-7',
+    title: 'Uso correcto y presentación del sistema',
+    defaultTime: '08:45',
+    message: '¡Buenos días, {{firstName}}! Quiero asegurarme de que tengas clara tu rutina.\n\nComienza el día con tu primer Unimate y toma el segundo antes de tu primera comida, antes de entrenar o cuando necesites apoyo con tu energía y enfoque.\n\nToma Balance antes o con tu comida más fuerte y bébelo inmediatamente después de mezclarlo.\n\nAdemás, nuestros uplines nos proveen semanalmente un sistema de educación, salud y formación empresarial sin costo. Puedes conectarte según el tiempo te lo permita para aprender, crecer y mantenerte cerca de la comunidad.\n\n¿Ya comenzaste o todavía estás esperando tu caja?'
   },
   {
     day: 10,
-    title: 'Resolver obstáculos',
-    message: 'Hola, {{nombre_contacto}}. Quería tocar base contigo para asegurarme de que todo siga claro. ¿Hay algo que se te esté olvidando, algo que no entiendas o alguna parte de la rutina con la que necesites ayuda?',
-    goal: 'Evitar pérdida de uso y resolver problemas prácticos.'
+    key: 'followup-day-10',
+    title: 'Primer check-in',
+    defaultTime: '12:15',
+    message: '¿Cómo va todo hasta ahora, {{firstName}}?\n\nYa llevas varios días construyendo una rutina nueva. ¿Qué has notado en tu energía, apetito, digestión o antojos?\n\nNo busques solamente cambios enormes. Muchas veces el progreso comienza con pequeñas señales que antes pasábamos por alto.'
   },
   {
     day: 14,
-    title: 'Mitad del primer mes',
-    message: 'Hola, {{nombre_contacto}}. Ya estás llegando a la mitad de tu primer mes. Comparando con cuando comenzaste, ¿qué cambios has notado en tu energía, rutina o manera de sentirte durante el día?',
-    goal: 'Ayudar a reconocer progreso y reforzar continuidad sin prometer resultados médicos.'
+    key: 'followup-day-14',
+    title: 'Invitación al sistema',
+    defaultTime: '17:45',
+    message: '{{firstName}}, los productos son una parte del proceso, pero el conocimiento y la comunidad son los que nos ayudan a mantener dirección.\n\nTu próxima oportunidad para conectarte es:\n\n{{meetingName}}\n{{meetingDateTime}}\n{{meetingLink}}\n\nNo tienes que encender la cámara ni hablar. Puedes escuchar mientras trabajas o haces otras cosas.\n\nLo importante es mantenerte cerca de un ambiente que te ayude a avanzar.'
   },
   {
     day: 18,
-    title: 'Mantener consistencia',
-    message: 'Hola, {{nombre_contacto}}. Solo quería recordarte que la consistencia durante estas primeras semanas es muy importante. ¿Has podido mantener la rutina la mayoría de los días?',
-    goal: 'Reforzar el hábito y detectar interrupciones.'
+    key: 'followup-day-18',
+    title: 'Consistencia',
+    defaultTime: '10:30',
+    message: 'Un recordatorio para ti hoy, {{firstName}}: no necesitas hacerlo todo perfecto para seguir avanzando.\n\nSi un día te sales de la rutina, simplemente vuelve a comenzar con tu próxima decisión.\n\nLa verdadera victoria no es nunca fallar. Es no abandonar.\n\nDel 1 al 10, ¿cómo sientes que va tu consistencia?'
   },
   {
-    day: 21,
-    title: 'Preparar el segundo mes',
-    message: 'Hola, {{nombre_contacto}}. Ya estás entrando en la última parte de tu primer mes. Quería revisar cuánto producto te queda y asegurarme de que tengas todo listo para continuar sin interrupciones.',
-    goal: 'Identificar tipo de compra y anticipar el segundo mes.'
+    day: 22,
+    key: 'followup-day-22',
+    title: 'Comunidad e invitación',
+    defaultTime: '18:15',
+    message: '¡Ya estás entrando en una etapa importante, {{firstName}}!\n\nUna decisión comienza a convertirse en estilo de vida cuando nos mantenemos conectados, seguimos aprendiendo y nos rodeamos de personas que también quieren avanzar.\n\nEsta semana puedes conectarte en:\n\n{{meetingName}}\n{{meetingDateTime}}\n{{meetingLink}}\n\nEste sistema está diseñado para formar personas, desarrollar líderes y ayudarnos a romper nuestros propios límites.\n\n¿Crees que puedas conectarte?'
   },
   {
-    day: 25,
-    title: 'Próximo pedido',
-    message: 'Hola, {{nombre_contacto}}. Tu próximo mes se está acercando. Quería saber si ya tienes todo listo para continuar o si necesitas que te ayude con tu próximo pedido. Aquí tienes mi enlace por si lo necesitas:\n\n{{feelgreat_link}}',
-    goal: 'Prevenir interrupciones y resolver dudas de renovación.'
-  },
-  {
-    day: 28,
-    title: 'Experiencia del primer mes',
-    message: 'Hola, {{nombre_contacto}}. Ya estás por completar tu primer mes. ¿Cuál dirías que ha sido el cambio o beneficio que más valoras desde que comenzaste?',
-    goal: 'Recopilar experiencia y fortalecer percepción de valor.'
+    day: 26,
+    key: 'followup-day-26',
+    title: 'Reconocer la experiencia',
+    defaultTime: '13:00',
+    message: '{{firstName}}, ya estás cerca de completar tus primeros 30 días.\n\nQuiero hacerte una pregunta importante:\n\n¿Qué ha sido lo que más te ha gustado de tu experiencia hasta ahora?\n\nA veces necesitamos detenernos y reconocer lo bueno para darnos cuenta de cuánto hemos avanzado.'
   },
   {
     day: 30,
-    title: 'Completar 30 días',
-    message: 'Hola, {{nombre_contacto}}. Hoy completas tus primeros 30 días. Me gustaría saber cómo describirías tu experiencia hasta ahora y confirmar que tengas todo preparado para continuar durante tu segundo mes.',
-    goal: 'Cerrar el primer ciclo, confirmar continuidad y preparar el siguiente programa.'
+    key: 'followup-day-30',
+    title: 'Continuidad',
+    defaultTime: '10:00',
+    message: '¡Felicidades, {{firstName}}! Hoy completas tus primeros 30 días.\n\nDe todo lo que viviste durante este primer mes, ¿qué fue lo que más te gustó?\n\nAhora que ya conoces mejor el protocolo y has comenzado a desarrollar una rutina, el próximo paso es continuar construyendo sobre lo que ya comenzaste.\n\n¿Cuál es el resultado principal que te gustaría alcanzar durante tus próximos 30 días?'
   }
 ];
 
-export const first30DayStepsEn: FollowUpStep[] = [
-  { day: 0, title: 'Welcome and getting started', message: 'Hi {{nombre_contacto}}, I’m excited to support you throughout your first 30 days. I wanted to confirm that you have everything ready and see whether you were able to get started. I’m here to help with any questions.', goal: 'Confirm setup and open communication.' },
-  { day: 2, title: 'First 48 hours', message: 'Hi {{nombre_contacto}}, I wanted to check in and see how your first 48 hours have gone. Were you able to get started comfortably, or do you have any questions about how to use everything?', goal: 'Check early progress.' },
-  { day: 4, title: 'Initial experience', message: 'Hi {{nombre_contacto}}, you’ve now had a few days to begin your routine. What is the first thing you have noticed, or what have you liked most so far?', goal: 'Invite a response.' },
-  { day: 7, title: 'First week', message: 'Hi {{nombre_contacto}}, you’ve completed your first week. How have you been feeling, and which part of the routine has been easiest or most difficult to maintain?', goal: 'Review consistency.' },
-  { day: 10, title: 'Remove obstacles', message: 'Hi {{nombre_contacto}}, I wanted to check in and make sure everything is still clear. Is there anything you tend to forget, anything you do not understand, or any part of the routine you need help with?', goal: 'Resolve practical issues.' },
-  { day: 14, title: 'Halfway through the first month', message: 'Hi {{nombre_contacto}}, you’re reaching the halfway point of your first month. Compared with when you started, what changes have you noticed in your energy, routine, or how you feel throughout the day?', goal: 'Recognize progress.' },
-  { day: 18, title: 'Maintain consistency', message: 'Hi {{nombre_contacto}}, I just wanted to remind you that consistency during these first few weeks is important. Have you been able to follow the routine most days?', goal: 'Reinforce the habit.' },
-  { day: 21, title: 'Prepare for month two', message: 'Hi {{nombre_contacto}}, you’re entering the final part of your first month. I wanted to check how much product you have left and make sure you are ready to continue without interruptions.', goal: 'Prepare continuity.' },
-  { day: 25, title: 'Next order', message: 'Hi {{nombre_contacto}}, your next month is approaching. I wanted to see whether you already have everything ready to continue or need help with your next order. Here is my link if you need it:\n\n{{feelgreat_link}}', goal: 'Prevent interruption.' },
-  { day: 28, title: 'First-month experience', message: 'Hi {{nombre_contacto}}, you’re about to complete your first month. What would you say is the change or benefit you value most since you started?', goal: 'Review first month.' },
-  { day: 30, title: 'Complete 30 days', message: 'Hi {{nombre_contacto}}, today you complete your first 30 days. I’d love to hear how you would describe your experience so far and confirm that you have everything ready to continue into your second month.', goal: 'Close the first cycle.' }
-];
+export const first30DayStepsEn = first30DaySteps;
 
-export function stepsForLanguage(language: ContactLanguage = 'Español'): FollowUpStep[] {
-  return language === 'English' ? first30DayStepsEn : first30DaySteps;
+export function stepsForLanguage(_language: ContactLanguage = 'Español'): FollowUpStep[] {
+  return first30DaySteps;
+}
+
+export function localDateKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function addCalendarDays(dateKey: string, days: number): string {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  date.setDate(date.getDate() + days);
+  return localDateKey(date);
+}
+
+export function buildLocalDueAt(dateKey: string, time: string): string {
+  return `${dateKey}T${time || '00:00'}`;
+}
+
+export function localTimeKey(date = new Date()): string {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+export function getDeviceTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || DEFAULT_TIMEZONE;
+}
+
+export function isTaskOpen(task: Pick<FollowUpTask, 'status'>): boolean {
+  return task.status !== 'Completada' && task.status !== 'Cancelada';
+}
+
+export function defaultFollowUpTemplates(now = new Date()): MessageTemplate[] {
+  return first30DaySteps.map((step) => ({
+    key: step.key,
+    name: step.title,
+    internalTitle: step.title,
+    day: step.day,
+    defaultTime: step.defaultTime,
+    body: step.message,
+    message: step.message,
+    originalMessage: step.message,
+    availableVariables: followUpVariables,
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    templateVersion: 1
+  }));
 }
 
 export const defaultWeeklyEvents: WeeklyEvent[] = [
@@ -103,10 +147,10 @@ export const defaultWeeklyEvents: WeeklyEvent[] = [
     name: 'Unicity Monday Meeting',
     weekday: 1,
     eventTime: '19:00',
-    reminderTime: '18:30',
+    reminderTime: '19:00',
     link: 'https://us06web.zoom.us/j/88673512174?pwd=vDsClPnuX1Wi7Xgm8W1u9MuAIbLGPl.1',
-    message: 'Hola, {{nombre_contacto}}. Te recuerdo que hoy a las 7:00 p. m. tenemos el Unicity Monday Meeting. Aquí tienes el enlace para conectarte:\n\n{{enlace_evento}}',
-    messageEn: 'Hi {{nombre_contacto}}, this is a reminder that today at 7:00 p.m. we have the Unicity Monday Meeting. Here is the link to join:\n\n{{enlace_evento}}',
+    audience: 'Miembros y distribuidores',
+    message: '',
     active: true,
     updatedAt: new Date().toISOString()
   },
@@ -114,21 +158,21 @@ export const defaultWeeklyEvents: WeeklyEvent[] = [
     name: 'Capacitación y Liderazgo',
     weekday: 1,
     eventTime: '21:00',
-    reminderTime: '20:30',
+    reminderTime: '21:00',
     link: 'https://us02web.zoom.us/j/84616673775',
-    message: 'Hola, {{nombre_contacto}}. Hoy a las 9:00 p. m. tenemos Capacitación y Liderazgo. Aquí tienes el enlace para conectarte:\n\n{{enlace_evento}}',
-    messageEn: 'Hi {{nombre_contacto}}, today at 9:00 p.m. we have our Leadership Training. Here is the link to join:\n\n{{enlace_evento}}',
+    audience: 'Principalmente distribuidores, pero disponible para miembros interesados en aprender sobre el negocio',
+    message: '',
     active: true,
     updatedAt: new Date().toISOString()
   },
   {
-    name: 'Academia Salud Metabólica',
+    name: 'Academia de Salud Metabólica',
     weekday: 2,
     eventTime: '21:00',
-    reminderTime: '20:30',
+    reminderTime: '21:00',
     link: 'https://us02web.zoom.us/j/84616673775',
-    message: 'Hola, {{nombre_contacto}}. Hoy a las 9:00 p. m. tenemos la Academia de Salud Metabólica. Aquí tienes el enlace para conectarte:\n\n{{enlace_evento}}',
-    messageEn: 'Hi {{nombre_contacto}}, today at 9:00 p.m. we have the Metabolic Health Academy. Here is the link to join:\n\n{{enlace_evento}}',
+    audience: 'Miembros y distribuidores',
+    message: '',
     active: true,
     updatedAt: new Date().toISOString()
   },
@@ -136,20 +180,14 @@ export const defaultWeeklyEvents: WeeklyEvent[] = [
     name: 'Presentación de Negocio',
     weekday: 6,
     eventTime: '11:30',
-    reminderTime: '11:00',
+    reminderTime: '11:30',
     link: 'https://us06web.zoom.us/j/6421915226',
-    message: 'Hola, {{nombre_contacto}}. Hoy a las 11:30 a. m. tenemos nuestra Presentación de Negocio. Aquí tienes el enlace para conectarte:\n\n{{enlace_evento}}',
-    messageEn: 'Hi {{nombre_contacto}}, today at 11:30 a.m. we have our Business Presentation. Here is the link to join:\n\n{{enlace_evento}}',
+    audience: 'Distribuidores, prospectos de negocio y miembros interesados',
+    message: '',
     active: true,
     updatedAt: new Date().toISOString()
   }
 ];
-
-function dateKeyFrom(baseDate: string, daysToAdd: number): string {
-  const date = new Date(`${baseDate}T00:00:00`);
-  date.setDate(date.getDate() + daysToAdd);
-  return date.toISOString().slice(0, 10);
-}
 
 export function memberName(member: Pick<Member, 'firstName' | 'lastName'>): string {
   return [member.firstName, member.lastName].filter(Boolean).join(' ').trim();
@@ -157,47 +195,139 @@ export function memberName(member: Pick<Member, 'firstName' | 'lastName'>): stri
 
 export function currentProgramDay(startDate?: string, now = new Date()): number | null {
   if (!startDate) return null;
-  const [year, month, day] = startDate.split('-').map(Number);
-  const start = Date.UTC(year, month - 1, day);
-  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  return Math.max(0, Math.floor((today - start) / 86_400_000));
+  const start = new Date(`${startDate}T00:00:00`);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.max(0, Math.floor((today.getTime() - start.getTime()) / 86_400_000));
 }
 
 export function renewalMessageForPurchaseType(purchaseType: MemberPurchaseType, feelGreatLink = ''): string {
-  if (purchaseType === 'Autosuscripción') {
-    return 'Hola, {{nombre_contacto}}. Tu próximo mes se está acercando. Quería confirmar que toda la información de tu autosuscripción esté correcta y saber si necesitas ayuda antes de que se procese.';
+  if (purchaseType === 'Autosuscripción' || purchaseType === 'Suscripción') {
+    return 'Hola, {{nombre_contacto}}. Tu próximo mes se está acercando. Quería confirmar que toda la información de tu suscripción esté correcta y saber si necesitas ayuda antes de que se procese.';
   }
-  if (purchaseType === 'Compra única') {
+  if (purchaseType === 'Compra única' || purchaseType === 'Compra individual') {
     return `Hola, {{nombre_contacto}}. Tu próximo mes se está acercando. Quería saber si ya deseas preparar tu próximo pedido para que puedas continuar sin interrupciones. Si necesitas el enlace, aquí lo tienes: ${feelGreatLink || '{{feelgreat_link}}'}`;
   }
-  return 'Hola, {{nombre_contacto}}. Tu próximo mes se está acercando. ¿Sabes si tu pedido quedó en autosuscripción o si necesitas realizar un nuevo pedido? Puedo ayudarte a verificarlo.';
+  return 'Hola, {{nombre_contacto}}. Tu próximo mes se está acercando. ¿Sabes si tu pedido quedó en suscripción o si necesitas realizar un nuevo pedido? Puedo ayudarte a verificarlo.';
 }
 
-export function buildFirst30DayTasks(member: Member, feelGreatLink = ''): FollowUpTask[] {
-  if (!member.id || !member.protocolStartDate) return [];
-  const language = member.language || 'Español';
-  return stepsForLanguage(language).map((step) => ({
-    memberId: member.id,
-    kind: 'Seguimiento',
-    program: FIRST_30_DAYS_PROGRAM,
-    title: step.title,
-    contactName: memberName(member),
+export function isBusinessEligible(member: Pick<Member, 'interest'>): boolean {
+  return member.interest === 'Interesado en negocio' || member.interest === 'Distribuidor activo';
+}
+
+function audienceScore(event: WeeklyEvent, contactType?: ContactType): number {
+  const audience = (event.audience || '').toLowerCase();
+  if (!event.active) return -1;
+  if (contactType === 'Ambos' || !contactType) return audience.includes('miembro') && audience.includes('distribuidor') ? 3 : 1;
+  if (contactType === 'Miembro') return audience.includes('miembro') ? 3 : audience.includes('disponible') ? 1 : -1;
+  if (contactType === 'Distribuidor') return audience.includes('distribuidor') || audience.includes('negocio') || audience.includes('liderazgo') ? 3 : -1;
+  return 1;
+}
+
+export function nextOccurrence(event: WeeklyEvent, afterDueAt: string): Date | null {
+  if (!event.active) return null;
+  const after = new Date(afterDueAt);
+  if (Number.isNaN(after.getTime())) return null;
+  for (let offset = 0; offset <= 14; offset += 1) {
+    const candidate = new Date(after);
+    candidate.setDate(after.getDate() + offset);
+    if (candidate.getDay() !== event.weekday) continue;
+    const [hour, minute] = event.eventTime.split(':').map(Number);
+    candidate.setHours(hour || 0, minute || 0, 0, 0);
+    if (candidate.getTime() > after.getTime()) return candidate;
+  }
+  return null;
+}
+
+export function findNextMeeting(events: WeeklyEvent[], dueAt: string, contactType?: ContactType): MeetingSnapshot | undefined {
+  return events
+    .map((event) => ({ event, score: audienceScore(event, contactType), occurrence: nextOccurrence(event, dueAt) }))
+    .filter((item): item is { event: WeeklyEvent; score: number; occurrence: Date } => item.score >= 0 && Boolean(item.occurrence))
+    .sort((a, b) => b.score - a.score || a.occurrence.getTime() - b.occurrence.getTime())[0]
+    ? (() => {
+        const best = events
+          .map((event) => ({ event, score: audienceScore(event, contactType), occurrence: nextOccurrence(event, dueAt) }))
+          .filter((item): item is { event: WeeklyEvent; score: number; occurrence: Date } => item.score >= 0 && Boolean(item.occurrence))
+          .sort((a, b) => b.score - a.score || a.occurrence.getTime() - b.occurrence.getTime())[0];
+        return {
+          id: best.event.id,
+          name: best.event.name,
+          dateTime: best.occurrence.toLocaleString('es-US', { weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
+          link: best.event.link,
+          audience: best.event.audience
+        };
+      })()
+    : undefined;
+}
+
+export function resolveFollowUpMessage(template: MessageTemplate | FollowUpStep, member: Member, settings: Partial<AppSettings> = {}, meeting?: MeetingSnapshot): string {
+  const body = 'body' in template ? template.message || template.body : template.message;
+  const contact: Contact = {
+    firstName: member.firstName,
+    lastName: member.lastName || '',
     phone: member.phone,
-    channel: member.preferredChannel,
-    dueDate: dateKeyFrom(member.protocolStartDate!, step.day),
-    dueTime: member.followUpTime || DEFAULT_TASK_TIME,
-    reminderMinutes: member.reminderMinutes || 30,
-    language,
-    programDay: step.day,
-    message: step.message.replaceAll('{{nombre_contacto}}', member.firstName).replaceAll('{{feelgreat_link}}', feelGreatLink || '{{feelgreat_link}}'),
-    status: 'Pendiente',
-    createdAt: new Date().toISOString(),
-    sourceKey: `member:${member.id}:day:${step.day}`
-  }));
+    countryCode: member.countryCode || '1',
+    country: member.country || '',
+    category: member.contactType === 'Distribuidor' ? 'Distribuidor' : 'Miembro',
+    listIds: [],
+    tags: [],
+    createdAt: member.createdAt,
+    status: 'Activo',
+    preferredChannel: member.preferredChannel,
+    consent: true
+  };
+  return personalizeMessage(body, contact, '', {
+    firstName: member.firstName,
+    feelGreatReferralLink: member.feelGreatReferralLink || '',
+    appStoreLink: settings.appStoreLink || '',
+    googlePlayLink: settings.googlePlayLink || '',
+    meetingName: meeting?.name || '',
+    meetingDateTime: meeting?.dateTime || '',
+    meetingLink: meeting?.link || ''
+  });
+}
+
+export function buildFirst30DayTasks(member: Member, settingsOrLink: Partial<AppSettings> | string = {}, templates: MessageTemplate[] = defaultFollowUpTemplates(), events: WeeklyEvent[] = defaultWeeklyEvents, now = new Date()): FollowUpTask[] {
+  if (!member.id || !member.protocolStartDate) return [];
+  const settings = typeof settingsOrLink === 'string' ? { feelGreatLink: settingsOrLink } : settingsOrLink;
+  return first30DaySteps.map((step) => {
+    const template = templates.find((item) => item.key === step.key) || defaultFollowUpTemplates().find((item) => item.key === step.key)!;
+    const dueDate = step.day === 0 ? localDateKey(now) : addCalendarDays(member.protocolStartDate!, step.day);
+    const dueTime = step.day === 0 ? localTimeKey(now) : template.defaultTime || step.defaultTime;
+    const dueAt = buildLocalDueAt(dueDate, dueTime);
+    const meetingSnapshot = step.day === 14 || step.day === 22 ? findNextMeeting(events, dueAt, member.contactType) : undefined;
+    const resolvedMessage = cleanUnresolvedMessage(resolveFollowUpMessage(template, member, settings, meetingSnapshot));
+    return {
+      memberId: member.id,
+      kind: 'Seguimiento',
+      program: FIRST_30_DAYS_PROGRAM,
+      title: template.internalTitle || template.name || step.title,
+      contactName: memberName(member),
+      phone: member.phone,
+      channel: member.preferredChannel,
+      language: member.language || 'Español',
+      dueDate,
+      dueTime,
+      dueAt,
+      reminderMinutes: 30,
+      programDay: step.day,
+      sequenceDay: step.day,
+      templateKey: step.key,
+      templateVersion: template.templateVersion || 1,
+      message: resolvedMessage,
+      resolvedMessage,
+      status: 'Pendiente',
+      createdAt: now.toISOString(),
+      sourceKey: `member:${member.id}:first30:${step.day}`,
+      meetingId: meetingSnapshot?.id,
+      meetingSnapshot,
+      meetingLink: meetingSnapshot?.link
+    };
+  });
 }
 
 export function buildRenewalTask(member: Member): FollowUpTask | null {
   if (!member.id || !member.nextOrderDate) return null;
+  const dueDate = addCalendarDays(member.nextOrderDate, -5);
   return {
     memberId: member.id,
     kind: 'Seguimiento',
@@ -207,18 +337,15 @@ export function buildRenewalTask(member: Member): FollowUpTask | null {
     phone: member.phone,
     channel: member.preferredChannel,
     language: member.language || 'Español',
-    dueDate: dateKeyFrom(member.nextOrderDate, -5),
-    dueTime: member.followUpTime || DEFAULT_TASK_TIME,
-    reminderMinutes: member.reminderMinutes || 30,
+    dueDate,
+    dueTime: '10:00',
+    dueAt: buildLocalDueAt(dueDate, '10:00'),
+    reminderMinutes: 30,
     message: 'Hola, {{nombre_contacto}}. Tu próximo pedido se acerca en unos días. Quería asegurarme de que todo esté correcto y saber si necesitas ayuda con algún cambio antes de que se procese.'.replaceAll('{{nombre_contacto}}', member.firstName),
     status: 'Pendiente',
     createdAt: new Date().toISOString(),
     sourceKey: `member:${member.id}:renewal:${member.nextOrderDate}`
   };
-}
-
-export function isBusinessEligible(member: Pick<Member, 'interest'>): boolean {
-  return member.interest === 'Interesado en negocio' || member.interest === 'Distribuidor activo';
 }
 
 export function parsePastedProspects(text: string, existingPhones: string[] = [], defaultCountryCode = '1'): { contacts: Contact[]; invalid: string[]; duplicates: string[] } {
