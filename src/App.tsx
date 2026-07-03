@@ -12,13 +12,17 @@ import {
   ExternalLink,
   Eye,
   EyeOff,
+  FileText,
   FileImage,
   Home,
   Library,
+  Link2,
   LogOut,
   MessageCircle,
+  Package,
   Phone,
   Plus,
+  Power,
   Send,
   Share2,
   Trash2,
@@ -32,11 +36,10 @@ import type { AppLanguage, AppSettings, Campaign, Channel, Contact, ContactLangu
 import { exportContactsCsv, parseContactsCsv, csvRowToContact } from './utils/csv';
 import { buildFirst30DayTasks, buildLocalDueAt, buildTaskFromTemplate, currentProgramDay, defaultFollowUpTemplates, defaultWeeklyEvents, findNextMeeting, getDeviceTimezone, isTaskOpen, localDateKey, memberName, parsePastedProspects, resolveFollowUpMessage, templateDisplayTime } from './utils/followup';
 import { compressImage, fileToDataUrl, shareImage } from './utils/image';
-import { GOOGLE_DRIVE_SCOPE, clearDriveToken, driveFileToMediaAsset, driveTokenFromResponse, readDriveToken, storeDriveToken } from './utils/googleDrive';
+import { clearDriveToken, driveFileToMediaAsset, readDriveToken } from './utils/googleDrive';
 import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, cleanUnresolvedMessage, personalizeMessage } from './utils/messages';
 import { isDuplicatePhone, normalizePhone } from './utils/phone';
 
-type GoogleTokenResponse = { access_token?: string; expires_in?: number; error?: string; error_description?: string };
 type GoogleTokenClient = { requestAccessToken: (options?: { prompt?: string }) => void };
 
 declare global {
@@ -55,12 +58,13 @@ type BroadcastTab = 'lists' | 'library';
 type DriveFilter = 'all' | 'photos' | 'videos';
 
 const entryLogoSrc = `${import.meta.env.BASE_URL}golden-team-logo-transparent.png`;
+const officeUrl = 'https://office.unicity.com/#/dashboard';
+const unicityLibraryUrl = 'https://office.unicity.com/#/library';
+const productsUrl = 'https://shop.unicity.com/usa/en/products';
 const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 const googleApiKey = import.meta.env.VITE_GOOGLE_API_KEY || '';
 const googleAppId = import.meta.env.VITE_GOOGLE_APP_ID || '';
 const contactLanguages: ContactLanguage[] = ['Español', 'English'];
-const taskGroups: TaskGroup[] = ['Hoy', 'Vencidas', 'Próximas', 'Completadas'];
-const taskFilters: TaskFilter[] = ['Todas', 'Difusión', 'Seguimiento', 'Reuniones'];
 
 const copy = {
   es: {
@@ -70,6 +74,7 @@ const copy = {
     account: 'Cuenta',
     profileInfo: 'Información del perfil',
     feelLink: 'Mi Feel Great Link',
+    linkCenter: 'Centro de enlaces',
     language: 'Idioma',
     logout: 'Cerrar sesión',
     broadcast: 'Difusión',
@@ -93,7 +98,7 @@ const copy = {
     importContact: 'Importar contacto',
     importContacts: 'Importar contactos',
     tasks: 'Tareas',
-    tasksSub: 'Mensajes y acciones que requieren tu atención.',
+    tasksSub: 'Mensajes pendientes de seguimiento.',
     save: 'Guardar',
     edit: 'Editar',
     delete: 'Eliminar',
@@ -116,6 +121,7 @@ const copy = {
     account: 'Account',
     profileInfo: 'Profile information',
     feelLink: 'My Feel Great Link',
+    linkCenter: 'Link center',
     language: 'Language',
     logout: 'Log out',
     broadcast: 'Broadcast',
@@ -139,7 +145,7 @@ const copy = {
     importContact: 'Import contact',
     importContacts: 'Import contacts',
     tasks: 'Tasks',
-    tasksSub: 'Messages and actions that need your attention.',
+    tasksSub: 'Pending follow-up messages.',
     save: 'Save',
     edit: 'Edit',
     delete: 'Delete',
@@ -229,28 +235,6 @@ function driveConfigMissing(language: AppLanguage) {
   return language === 'en'
     ? `Missing Google Cloud values: ${missing.join(', ')}.`
     : `Faltan valores de Google Cloud: ${missing.join(', ')}.`;
-}
-
-function loadExternalScript(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(`script[src="${src}"]`);
-    if (existing?.dataset.loaded === 'true') return resolve();
-    if (existing) {
-      existing.addEventListener('load', () => resolve(), { once: true });
-      existing.addEventListener('error', () => reject(new Error(`No se pudo cargar ${src}`)), { once: true });
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = src;
-    script.async = true;
-    script.defer = true;
-    script.addEventListener('load', () => {
-      script.dataset.loaded = 'true';
-      resolve();
-    }, { once: true });
-    script.addEventListener('error', () => reject(new Error(`No se pudo cargar ${src}`)), { once: true });
-    document.head.appendChild(script);
-  });
 }
 
 function downloadFile(content: string, filename: string, type: string) {
@@ -387,8 +371,8 @@ function App() {
   const [activeCampaignId, setActiveCampaignId] = useState<number | null>(null);
   const [queueIndex, setQueueIndex] = useState(0);
   const [driveFilter, setDriveFilter] = useState<DriveFilter>('all');
-  const [googleLibrariesReady, setGoogleLibrariesReady] = useState(false);
-  const [googleLibrariesError, setGoogleLibrariesError] = useState('');
+  const [googleLibrariesReady] = useState(false);
+  const [googleLibrariesError] = useState('');
   const [driveToken, setDriveToken] = useState(() => readDriveToken());
   const [followForm, setFollowForm] = useState({
     firstName: '',
@@ -413,8 +397,8 @@ function App() {
   const [pendingSendTask, setPendingSendTask] = useState<{ taskId: number; channel: 'WhatsApp' | 'SMS' } | null>(null);
   const [showSendConfirm, setShowSendConfirm] = useState(false);
   const [taskGroup, setTaskGroup] = useState<TaskGroup>('Hoy');
-  const [taskFilter, setTaskFilter] = useState<TaskFilter>('Todas');
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(() => (typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'));
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const templateTextRef = useRef<HTMLTextAreaElement | null>(null);
@@ -427,7 +411,7 @@ function App() {
   const selectedQueue = useMemo(() => queue.filter((item) => item.campaignId === activeCampaignId), [activeCampaignId, queue]);
   const currentQueueItem = selectedQueue[queueIndex];
   const selectedMember = members.find((member) => member.id === selectedMemberId) || null;
-  const selectedTask = useMemo(() => [...tasks, ...queueTasksFromQueue(queue)].find((task) => task.id === selectedTaskId) || null, [queue, selectedTaskId, tasks]);
+  const selectedTask = useMemo(() => tasks.find((task) => task.id === selectedTaskId) || null, [selectedTaskId, tasks]);
   const activeDriveToken = driveToken?.expiresAt && driveToken.expiresAt > Date.now() + 30_000 ? driveToken : null;
   const driveConnected = Boolean(activeDriveToken);
 
@@ -531,7 +515,7 @@ function App() {
   }
 
   useEffect(() => {
-    loadAll('Datos locales cargados.').catch((error) => setNotice(error instanceof Error ? error.message : 'No se pudieron cargar los datos.'));
+    loadAll().catch((error) => setNotice(error instanceof Error ? error.message : 'No se pudieron cargar los datos.'));
     const onOnline = () => setOnline(true);
     const onOffline = () => setOnline(false);
     const onAppNotice = (event: Event) => setNotice((event as CustomEvent<string>).detail);
@@ -543,46 +527,6 @@ function App() {
       window.removeEventListener('offline', onOffline);
       window.removeEventListener('app-notice', onAppNotice);
     };
-  }, []);
-
-  useEffect(() => {
-    if (!googleConfigured()) return;
-    let cancelled = false;
-    Promise.all([
-      loadExternalScript('https://accounts.google.com/gsi/client'),
-      loadExternalScript('https://apis.google.com/js/api.js')
-    ]).then(() => new Promise<void>((resolve, reject) => {
-      if (!window.gapi) return reject(new Error('Google API no está disponible.'));
-      window.gapi.load('picker', { callback: resolve, onerror: () => reject(new Error('Google Picker no pudo cargar.')) });
-    })).then(() => {
-      if (cancelled || !window.google?.accounts?.oauth2) return;
-      googleTokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
-        client_id: googleClientId,
-        scope: GOOGLE_DRIVE_SCOPE,
-        callback: (response: GoogleTokenResponse) => {
-          if (response.error) {
-            console.error('Google OAuth error', response);
-            setNotice(`Google Drive: ${response.error_description || response.error}`);
-            return;
-          }
-          const token = driveTokenFromResponse(response);
-          if (!token) return setNotice('Google Drive no devolvió access token.');
-          storeDriveToken(token);
-          setDriveToken(token);
-          void saveSettingsPatch({ googleDriveConnection: 'connected', googleDriveTokenHint: String(token.expiresAt) }, 'Google Drive conectado.');
-          void openDrivePicker(token.accessToken);
-        }
-      });
-      setGoogleLibrariesReady(true);
-      setGoogleLibrariesError('');
-    }).catch((error) => {
-      console.error('Google libraries error', error);
-      if (!cancelled) {
-        setGoogleLibrariesReady(false);
-        setGoogleLibrariesError(error instanceof Error ? error.message : 'Google no pudo cargar.');
-      }
-    });
-    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -620,7 +564,7 @@ function App() {
   const baseTemplates = useMemo(() => templates.filter((template) => template.templateType !== 'custom' && template.key?.startsWith('followup-day-')).sort((a, b) => (a.day || 0) - (b.day || 0)), [templates]);
   const customTemplates = useMemo(() => templates.filter((template) => template.templateType === 'custom').sort((a, b) => (a.day || 0) - (b.day || 0) || (a.name || '').localeCompare(b.name || '')), [templates]);
   const memberStatusById = useMemo(() => new Map(members.map((member) => [member.id, member.programStatus])), [members]);
-  const actionTasks = useMemo(() => [...tasks, ...queueTasksFromQueue(queue)].sort((a, b) => `${a.dueDate} ${a.dueTime}`.localeCompare(`${b.dueDate} ${b.dueTime}`)), [queue, tasks]);
+  const actionTasks = useMemo(() => [...tasks].sort((a, b) => `${a.dueDate} ${a.dueTime}`.localeCompare(`${b.dueDate} ${b.dueTime}`)), [tasks]);
   const visibleOpenTasks = useMemo(() => actionTasks.filter((task) => isTaskOpen(task) && (!task.memberId || memberStatusById.get(task.memberId) !== 'Pausado' && memberStatusById.get(task.memberId) !== 'Completado')), [actionTasks, memberStatusById]);
   const todayTasks = useMemo(() => visibleOpenTasks.filter((task) => task.dueDate === todayKey()), [visibleOpenTasks]);
   const overdueTasks = useMemo(() => visibleOpenTasks.filter((task) => task.dueDate < todayKey()), [visibleOpenTasks]);
@@ -628,28 +572,30 @@ function App() {
   const completedTasks = useMemo(() => actionTasks.filter((task) => task.status === 'Completada'), [actionTasks]);
   const taskBadge = todayTasks.length + overdueTasks.length;
 
-  function queueTasksFromQueue(items: QueueItem[]): FollowUpTask[] {
-    return items
-      .filter((item) => item.status === 'Pendiente' || item.status === 'Abierto')
-      .map((item) => ({
-        id: -Number(item.id || 0),
-        queueItemId: item.id,
-        contactId: item.contactId,
-        kind: 'Difusión',
-        program: 'Difusión manual',
-        title: item.status === 'Abierto' ? (lang === 'en' ? 'Confirm send' : 'Confirmar envío') : (lang === 'en' ? 'Send message' : 'Enviar mensaje'),
-        contactName: contactFullName(item.contactSnapshot),
-        phone: item.contactSnapshot.phone,
-        channel: item.channel === 'WhatsApp' || item.channel === 'SMS' ? item.channel : 'No definido',
-        language: item.language || contactLanguage(item.contactSnapshot),
-        dueDate: item.createdAt.slice(0, 10),
-        dueTime: '10:00',
-        message: item.personalizedMessage,
-        status: 'Pendiente',
-        createdAt: item.createdAt,
-        sourceKey: `queue:${item.id}`
-      }));
-  }
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('Notification' in window) || notificationPermission !== 'granted') return;
+    const timers = visibleOpenTasks
+      .filter((task) => task.id && task.id > 0)
+      .map((task) => {
+        const dueAt = new Date(task.dueAt || buildLocalDueAt(task.dueDate, task.dueTime)).getTime();
+        const delay = dueAt - Date.now() - 30 * 60 * 1000;
+        if (delay <= 0 || delay > 2_147_483_647) return null;
+        return window.setTimeout(() => {
+          const first = task.contactName.split(/\s+/)[0] || task.contactName;
+          const reminder = new Notification(`Enviar mensaje a ${first}`, {
+            body: `Día ${task.sequenceDay ?? task.programDay ?? '-'} · Seguimiento de 30 días`,
+            tag: `golden-team-task-${task.id}`
+          });
+          reminder.onclick = () => {
+            window.focus();
+            setSelectedTaskId(task.id || null);
+            setActive('tareas');
+          };
+        }, delay);
+      })
+      .filter((timer): timer is number => typeof timer === 'number');
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [notificationPermission, visibleOpenTasks]);
 
   function messageContext() {
     return { userName: displayName(settings), feelGreatLink: settings.feelGreatLink || '' };
@@ -696,6 +642,19 @@ function App() {
     if (!settings.feelGreatLink) return setNotice(lang === 'en' ? 'Add your Feel Great Link first.' : 'Añade tu Feel Great Link primero.');
     if (navigator.share) await navigator.share({ title: 'Feel Great Link', text: settings.feelGreatLink, url: settings.feelGreatLink });
     else await copyFeelGreatLink();
+  }
+
+  async function requestReminderNotifications() {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setNotificationPermission('unsupported');
+      setNotice('Este navegador no permite notificaciones locales programadas. Tus tareas seguirán visibles en Tareas.');
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
+    setNotice(permission === 'granted'
+      ? 'Notificaciones activadas. La app intentará avisarte 30 minutos antes mientras esté abierta.'
+      : 'Activa las notificaciones para recibir avisos antes de tus mensajes.');
   }
 
   async function saveProfile(event: FormEvent) {
@@ -1332,7 +1291,6 @@ function App() {
 
   const navItems: Array<{ id: MainSection; icon: ReactNode; label: string }> = [
     { id: 'inicio', icon: <Home size={20} />, label: c.nav.inicio },
-    { id: 'difusion', icon: <Send size={20} />, label: c.nav.difusion },
     { id: 'seguimiento', icon: <Users size={20} />, label: c.nav.seguimiento },
     { id: 'tareas', icon: <Bell size={20} />, label: c.nav.tareas }
   ];
@@ -1365,9 +1323,14 @@ function App() {
 
   const renderHome = () => {
     const nextFollowTask = [...overdueTasks, ...todayTasks, ...upcomingTasks].find((task) => taskType(task) === 'Seguimiento');
+    const quickLinks = [
+      { name: 'Office', url: officeUrl, icon: <Power size={19} /> },
+      { name: 'Library', url: unicityLibraryUrl, icon: <FileText size={19} /> },
+      { name: 'Productos', url: productsUrl, icon: <Package size={19} /> }
+    ];
     return (
     <div className="grid gap-4">
-      <button onClick={() => setAccountOpen(true)} className="-mx-4 -mt-[calc(env(safe-area-inset-top)+1rem)] min-w-0 rounded-b-[2rem] bg-brand px-4 pb-7 pt-[calc(env(safe-area-inset-top)+1.5rem)] text-left text-white shadow-soft sm:-mx-6 sm:px-6">
+      <button onClick={() => setAccountOpen(true)} className="-mx-4 min-w-0 rounded-b-[2rem] bg-brand px-4 pb-7 text-left text-white shadow-soft sm:-mx-6 sm:px-6" style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1.5rem)' }}>
         <div className="flex min-w-0 items-center gap-4">
           {settings.profilePhoto ? <img src={settings.profilePhoto} alt="" className="h-16 w-16 shrink-0 rounded-full object-cover ring-2 ring-white/20" /> : <div className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-white/10 text-xl font-black ring-2 ring-white/20">{initials(displayName(settings))}</div>}
           <div className="min-w-0 flex-1">
@@ -1377,8 +1340,7 @@ function App() {
           <ChevronRight className="shrink-0 text-white/70" />
         </div>
       </button>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Card><p className="text-xs font-bold text-slate-500">{c.broadcast}</p><strong className="text-3xl text-ink">{lists.length}</strong><p className="text-sm text-slate-500">{lang === 'en' ? 'lists' : 'listas'}</p></Card>
+      <div className="grid gap-3 sm:grid-cols-2">
         <Card><p className="text-xs font-bold text-slate-500">{c.followUps}</p><strong className="text-3xl text-ink">{activeFollowPeople.length}</strong><p className="text-sm text-slate-500">{lang === 'en' ? 'active' : 'activos'}</p></Card>
         <Card><p className="text-xs font-bold text-slate-500">{c.tasks}</p><strong className="text-3xl text-ink">{taskBadge}</strong><p className="text-sm text-slate-500">{lang === 'en' ? 'today + overdue' : 'hoy + vencidas'}</p></Card>
       </div>
@@ -1391,6 +1353,25 @@ function App() {
               <Badge tone={nextFollowTask.dueDate < todayKey() ? 'bad' : 'warn'}>{nextFollowTask.dueDate < todayKey() ? 'Vencido' : nextFollowTask.dueDate === todayKey() ? 'Hoy' : 'Próximo'}</Badge>
             </button>
           ) : <p className="text-sm text-slate-500">{lang === 'en' ? 'No active follow-ups right now.' : 'No hay seguimientos activos ahora.'}</p>}
+        </div>
+      </Card>
+      <Card>
+        <h2 className="text-lg font-black text-ink">Accesos rápidos</h2>
+        <div className="mt-3 grid gap-2">
+          {quickLinks.map((item) => (
+            <button key={item.name} onClick={() => window.open(item.url, '_blank', 'noopener,noreferrer')} className="flex min-h-[60px] w-full min-w-0 items-center gap-3 rounded-2xl bg-white p-3 text-left shadow-sm ring-1 ring-slate-100 transition hover:bg-slate-50">
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-brand/10 text-brand">{item.icon}</span>
+              <span className="min-w-0 flex-1"><strong className="block text-sm text-ink">{item.name}</strong><span className="block truncate text-xs text-slate-500">{readableUrl(item.url)}</span></span>
+              <ExternalLink size={17} className="shrink-0 text-slate-400" />
+            </button>
+          ))}
+          <div className="flex min-h-[60px] min-w-0 items-center gap-2 rounded-2xl bg-sky-50 p-3 ring-1 ring-sky-100">
+            <button onClick={openFeelGreatLink} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-white text-brand shadow-sm"><Link2 size={19} /></span>
+              <span className="min-w-0 flex-1"><strong className="block text-sm text-ink">Mi Feel Great Link</strong><span className="block truncate text-xs text-slate-500">{settings.feelGreatLink ? readableUrl(settings.feelGreatLink) : 'Sin configurar'}</span></span>
+            </button>
+            <IconButton label="Copiar Feel Great Link" onClick={copyFeelGreatLink} className="shrink-0 bg-white"><Copy size={17} /></IconButton>
+          </div>
         </div>
       </Card>
     </div>
@@ -1507,7 +1488,7 @@ function App() {
     <div className="fixed inset-0 z-50 overflow-y-auto bg-soft pb-6">
       <div className="mx-auto grid max-w-2xl gap-4 px-4 sm:px-6">
         <Header
-          title={accountPanel ? (accountPanel === 'profile' ? c.profileInfo : accountPanel === 'link' ? c.feelLink : accountPanel === 'templates' ? 'Plantillas de mensajes' : accountPanel === 'system' ? 'Sistema y reuniones' : c.language) : c.account}
+          title={accountPanel ? (accountPanel === 'profile' ? c.profileInfo : accountPanel === 'link' ? c.linkCenter : accountPanel === 'templates' ? 'Plantillas de mensajes' : accountPanel === 'system' ? 'Sistema y reuniones' : c.language) : c.account}
           subtitle={accountPanel ? displayName(settings) : ''}
           action={settings.profilePhoto ? <img src={settings.profilePhoto} className="h-14 w-14 shrink-0 rounded-full object-cover ring-2 ring-white/20" alt="" /> : <div className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-white/10 text-xl font-black ring-2 ring-white/20">{initials(displayName(settings))}</div>}
         >
@@ -1517,7 +1498,7 @@ function App() {
           <Card className="p-2">
             {[
               { id: 'profile' as const, icon: <Camera size={20} />, title: c.profileInfo, value: displayName(settings) },
-              { id: 'link' as const, icon: <ExternalLink size={20} />, title: c.feelLink, value: settings.feelGreatLink ? readableUrl(settings.feelGreatLink) : (lang === 'en' ? 'Not set' : 'Sin configurar') },
+              { id: 'link' as const, icon: <Link2 size={20} />, title: c.linkCenter, value: settings.feelGreatLink ? readableUrl(settings.feelGreatLink) : (lang === 'en' ? 'Not set' : 'Sin configurar') },
               { id: 'templates' as const, icon: <MessageCircle size={20} />, title: 'Plantillas de mensajes', value: `${baseTemplates.length} base · ${customTemplates.length} personalizadas` },
               { id: 'system' as const, icon: <Bell size={20} />, title: 'Sistema y reuniones', value: `${weeklyEvents.length} reuniones` },
               { id: 'language' as const, icon: <GlobeIcon />, title: c.language, value: lang === 'en' ? 'English' : 'Español' }
@@ -1553,13 +1534,30 @@ function App() {
         ) : null}
         {accountPanel === 'link' ? (
           <Card>
-            <form className="grid gap-3" onSubmit={saveProfile}>
-              <Field label="Feel Great Link"><input className="input" value={profileLink} onChange={(event) => setProfileLink(event.target.value)} /></Field>
-              <div className="grid grid-cols-2 gap-2">
-                <PrimaryButton type="submit"><Check size={16} />{c.save}</PrimaryButton>
-                <SecondaryButton onClick={copyFeelGreatLink}><Copy size={16} />{c.copy}</SecondaryButton>
-                <SecondaryButton onClick={shareFeelGreatLink}><Share2 size={16} />{c.share}</SecondaryButton>
-                <SecondaryButton onClick={openFeelGreatLink}><ExternalLink size={16} />{c.open}</SecondaryButton>
+            <form className="grid gap-4" onSubmit={saveProfile}>
+              <div className="rounded-[1.4rem] bg-sky-50 p-4 ring-1 ring-sky-100">
+                <h2 className="text-lg font-black text-ink">Mi Feel Great Link</h2>
+                <p className="mt-1 text-sm text-slate-600">Comparte tu enlace y facilita el acceso a tus clientes.</p>
+                <Field label="Feel Great Link"><input className="input mt-3 bg-white" value={profileLink} onChange={(event) => setProfileLink(event.target.value)} /></Field>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <PrimaryButton type="submit"><Check size={16} />{c.save}</PrimaryButton>
+                  <SecondaryButton onClick={copyFeelGreatLink}><Copy size={16} />{c.copy}</SecondaryButton>
+                  <SecondaryButton onClick={shareFeelGreatLink}><Share2 size={16} />{c.share}</SecondaryButton>
+                  <SecondaryButton onClick={openFeelGreatLink}><ExternalLink size={16} />{c.open}</SecondaryButton>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                {[
+                  { name: 'Office', url: officeUrl, icon: <Power size={18} /> },
+                  { name: 'Library', url: unicityLibraryUrl, icon: <FileText size={18} /> },
+                  { name: 'Productos', url: productsUrl, icon: <Package size={18} /> }
+                ].map((item) => (
+                  <button key={item.name} type="button" onClick={() => window.open(item.url, '_blank', 'noopener,noreferrer')} className="flex min-h-[60px] w-full min-w-0 items-center gap-3 rounded-2xl bg-slate-50 p-3 text-left transition hover:bg-slate-100">
+                    <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-white text-brand shadow-sm">{item.icon}</span>
+                    <span className="min-w-0 flex-1"><strong className="block text-sm text-ink">{item.name}</strong><span className="block truncate text-xs text-slate-500">{item.url}</span></span>
+                    <ExternalLink size={17} className="shrink-0 text-slate-400" />
+                  </button>
+                ))}
               </div>
             </form>
           </Card>
@@ -1914,21 +1912,45 @@ function App() {
 
   const renderTasks = () => {
     const source = taskGroup === 'Hoy' ? todayTasks : taskGroup === 'Vencidas' ? overdueTasks : taskGroup === 'Próximas' ? upcomingTasks : completedTasks;
-    const filtered = source.filter((task) => taskFilter === 'Todas' || taskType(task) === taskFilter);
+    const taskGroupCards = [
+      { group: 'Hoy' as const, label: 'Hoy', count: todayTasks.length, tone: 'bg-blue-50 text-brand' },
+      { group: 'Vencidas' as const, label: 'Vencidos', count: overdueTasks.length, tone: 'bg-red-50 text-red-700' },
+      { group: 'Próximas' as const, label: 'Próximos', count: upcomingTasks.length, tone: 'bg-amber-50 text-amber-700' },
+      { group: 'Completadas' as const, label: 'Completados', count: completedTasks.length, tone: 'bg-emerald-50 text-emerald-700' }
+    ];
     return (
       <div className="grid gap-4">
         <Header title={c.tasks} subtitle={c.tasksSub} />
-        <div className="flex gap-2 overflow-x-auto pb-1">{taskGroups.map((group) => <button key={group} onClick={() => setTaskGroup(group)} className={`shrink-0 rounded-full px-4 py-2 text-sm font-black ${taskGroup === group ? 'bg-brand text-white' : 'bg-white text-slate-600'}`}>{copy.es[group === 'Hoy' ? 'today' : group === 'Vencidas' ? 'overdue' : group === 'Próximas' ? 'upcoming' : 'completed'] || group}</button>)}</div>
-        <div className="flex gap-2 overflow-x-auto pb-1">{taskFilters.map((filter) => <button key={filter} onClick={() => setTaskFilter(filter)} className={`shrink-0 rounded-full px-4 py-2 text-sm font-black ${taskFilter === filter ? 'bg-brand text-white' : 'bg-white text-slate-600'}`}>{filter}</button>)}</div>
-        <div className="grid gap-3">
-          {filtered.map((task) => (
-            <button key={`${task.id}-${task.sourceKey}`} onClick={() => setSelectedTaskId(task.id || null)} className="min-w-0 rounded-[1.4rem] border border-slate-100 bg-white p-4 text-left shadow-sm">
-              <div className="flex min-w-0 justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-lg font-black text-ink">{task.contactName}</h3><p className="text-sm text-slate-500">{task.title}</p></div><Badge tone={task.status === 'Completada' ? 'good' : task.dueDate < todayKey() ? 'bad' : 'warn'}>{task.status}</Badge></div>
-              <p className="mt-2 text-sm text-slate-500">{taskType(task)} · {shortDate(task.dueDate, lang)} {task.dueTime} · {task.language || 'Español'} · {task.channel}</p>
-              <p className="mt-2 line-clamp-2 text-sm text-slate-600">{task.message}</p>
+        {notificationPermission !== 'granted' ? (
+          <Card className="border border-sky-100 bg-sky-50">
+            <p className="text-sm font-bold text-ink">Activa las notificaciones para recibir avisos antes de tus mensajes.</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate-600">La app intentará avisarte 30 minutos antes mientras esté abierta. En iOS/PWA las notificaciones programadas sin backend no siempre se garantizan.</p>
+            <SecondaryButton onClick={requestReminderNotifications} className="mt-3"><Bell size={16} />Activar notificaciones</SecondaryButton>
+          </Card>
+        ) : null}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {taskGroupCards.map((card) => (
+            <button key={card.group} onClick={() => setTaskGroup(card.group)} className={`rounded-[1.25rem] border p-4 text-left shadow-sm transition ${taskGroup === card.group ? 'border-brand bg-white ring-2 ring-brand/10' : 'border-slate-100 bg-white hover:bg-slate-50'}`}>
+              <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-black ${card.tone}`}>{card.label}</span>
+              <strong className="mt-3 block text-3xl text-ink">{card.count}</strong>
+              <span className="text-xs font-bold text-slate-500">mensajes</span>
             </button>
           ))}
-          {!filtered.length ? <Card><p className="text-sm text-slate-500">Sin tareas en esta vista.</p></Card> : null}
+        </div>
+        <div className="grid gap-3">
+          {source.map((task) => (
+            <button key={`${task.id}-${task.sourceKey}`} onClick={() => setSelectedTaskId(task.id || null)} className="min-w-0 rounded-[1.4rem] border border-slate-100 bg-white p-4 text-left shadow-sm transition hover:bg-slate-50">
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="truncate text-lg font-black text-ink">{task.contactName}</h3>
+                  <p className="mt-1 text-sm font-bold text-slate-700">Día {task.sequenceDay ?? task.programDay ?? '-'} · {task.title}</p>
+                  <p className="mt-1 text-xs text-slate-500">{shortDate(task.dueDate, lang)} {task.dueTime} · {task.channel === 'WhatsApp' || task.channel === 'SMS' ? task.channel : 'Método no definido'}</p>
+                </div>
+                <ChevronRight className="shrink-0 text-slate-400" />
+              </div>
+            </button>
+          ))}
+          {!source.length ? <Card><p className="text-sm text-slate-500">Sin tareas en esta vista.</p></Card> : null}
         </div>
         {selectedTask ? <div className="fixed inset-0 z-50 overflow-y-auto bg-soft px-4 pb-6 pt-[calc(env(safe-area-inset-top)+1rem)]"><div className="mx-auto max-w-2xl">{renderTaskDetail(selectedTask, true)}</div></div> : null}
       </div>
@@ -1951,7 +1973,6 @@ function App() {
         <div><h2 className="text-xl font-black text-ink">{task.title}</h2><p className="text-sm text-slate-500">{task.contactName} · Día {task.sequenceDay ?? task.programDay ?? '-'} · {task.phone}</p></div>
         <div className="rounded-2xl bg-slate-50 p-3"><p className="whitespace-pre-wrap text-sm text-slate-700">{displayMessage}</p>{displayTask.meetingLink ? <button onClick={() => window.open(displayTask.meetingLink, '_blank', 'noopener,noreferrer')} className="mt-3 inline-flex items-center gap-2 text-sm font-black text-brand"><ExternalLink size={16} />Zoom</button> : null}</div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {task.queueItemId ? <PrimaryButton onClick={() => { const item = queue.find((candidate) => candidate.id === task.queueItemId); if (item) { setActiveCampaignId(item.campaignId); setActive('difusion'); setSelectedTaskId(null); } }}><Send size={16} />Abrir cola</PrimaryButton> : null}
           {isTaskOpen(task) ? <PrimaryButton onClick={() => openWhatsAppFor(displayTask)}><MessageCircle size={16} />WhatsApp</PrimaryButton> : null}
           {isTaskOpen(task) ? <SecondaryButton onClick={() => openSmsFor(displayTask)}><Phone size={16} />SMS</SecondaryButton> : null}
           <SecondaryButton onClick={() => copyMessage(displayMessage)}><Copy size={16} />Copiar</SecondaryButton>
@@ -1977,7 +1998,7 @@ function App() {
         <p className="text-center text-xs text-slate-500">{notice}</p>
       </main>
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-3 pb-[calc(env(safe-area-inset-bottom)+0.55rem)] pt-2 backdrop-blur">
-        <div className="mx-auto grid max-w-2xl grid-cols-4 gap-2">
+        <div className="mx-auto grid max-w-2xl grid-cols-3 gap-2">
           {navItems.map((item) => (
             <button key={item.id} onClick={() => setActive(item.id)} className={`relative flex min-h-[62px] min-w-0 flex-col items-center justify-center gap-1 rounded-2xl px-1 text-[0.68rem] font-black leading-tight transition ${active === item.id ? 'bg-brand text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'}`}>
               {item.icon}

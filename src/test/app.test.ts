@@ -80,13 +80,13 @@ describe('contactos y telefonos', () => {
 });
 
 describe('google drive y seguimiento manual', () => {
-  it('usa GIS Token Model con scope drive.file y Google Picker', () => {
+  it('mantiene utilidades de Drive sin cargar Google desde la interfaz principal', () => {
     expect(GOOGLE_DRIVE_SCOPE).toBe('https://www.googleapis.com/auth/drive.file');
-    expect(appSource).toContain('google.accounts.oauth2.initTokenClient');
-    expect(appSource).toContain('requestAccessToken');
     expect(appSource).toContain('.setOAuthToken(accessToken)');
     expect(appSource).toContain('.setDeveloperKey(googleApiKey)');
     expect(appSource).toContain('.setAppId(googleAppId)');
+    expect(appSource).not.toContain('https://accounts.google.com/gsi/client');
+    expect(appSource).not.toContain('https://apis.google.com/js/api.js');
     expect(appSource).not.toContain('o/oauth2/v2/auth');
   });
 
@@ -148,11 +148,28 @@ describe('cuenta, safe area y plantillas visuales', () => {
   });
 
   it('cuenta mantiene seis opciones y filas completas pulsables', () => {
-    ['Información del perfil', 'Mi Feel Great Link', 'Plantillas de mensajes', 'Sistema y reuniones', 'Idioma', 'Cerrar sesión'].forEach((label) => {
+    ['Información del perfil', 'Centro de enlaces', 'Mi Feel Great Link', 'Plantillas de mensajes', 'Sistema y reuniones', 'Idioma', 'Cerrar sesión'].forEach((label) => {
       expect(appSource).toContain(label);
     });
     expect(appSource).toContain('min-h-[72px]');
     expect(appSource).toContain('Crear nueva plantilla');
+  });
+
+  it('inicio y navegacion se enfocan en tres areas y enlaces rapidos', () => {
+    expect(appSource).not.toContain("{ id: 'difusion', icon");
+    expect(appSource).toContain('grid-cols-3 gap-2');
+    expect(appSource).toContain('Accesos rápidos');
+    expect(appSource).toContain('https://office.unicity.com/#/dashboard');
+    expect(appSource).toContain('https://office.unicity.com/#/library');
+    expect(appSource).toContain('https://shop.unicity.com/usa/en/products');
+  });
+
+  it('tareas funciona como hub de mensajes de seguimiento', () => {
+    expect(appSource).toContain('Mensajes pendientes de seguimiento.');
+    expect(appSource).toContain('Activa las notificaciones para recibir avisos antes de tus mensajes.');
+    expect(appSource).toContain('Enviar mensaje a');
+    expect(appSource).toContain('Seguimiento de 30 días');
+    expect(appSource).not.toContain('Abrir cola');
   });
 
   it('editor nuevo no muestra eliminar y el personalizado existente si puede eliminarse', () => {
