@@ -73,6 +73,11 @@ export function buildWhatsAppLink(phone: string, message: string): string {
   return `https://wa.me/${safePhone}?text=${encodeURIComponent(message)}`;
 }
 
+export function buildWhatsAppDeepLink(phone: string, message: string): string {
+  const safePhone = phone.replace(/\D/g, '');
+  return `whatsapp://send?phone=${safePhone}&text=${encodeURIComponent(message)}`;
+}
+
 export function buildSmsLink(phone: string, message: string, platform = navigator.userAgent): string {
   const safePhone = phone.replace(/[^\d]/g, '');
   const separator = /iPhone|iPad|Macintosh/i.test(platform) ? '&' : '?';

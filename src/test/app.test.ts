@@ -8,7 +8,7 @@ import { exportContactsCsv, parseContactsCsv } from '../utils/csv';
 import { defaultSettings } from '../db';
 import { GOOGLE_DRIVE_SCOPE, clearDriveToken, driveFileToMediaAsset, driveTokenFromResponse, readDriveToken, storeDriveToken } from '../utils/googleDrive';
 import { addCalendarDays, buildFirst30DayTasks, buildRenewalTask, buildTaskFromTemplate, currentProgramDay, defaultFollowUpTemplates, defaultWeeklyEvents, findNextMeeting, isBusinessEligible, isTaskOpen, localDateKey, parsePastedProspects, renewalMessageForPurchaseType, resolveFollowUpMessage, templateDisplayTime } from '../utils/followup';
-import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, cleanUnresolvedMessage, messageNeedsFeelGreatLink, personalizeMessage } from '../utils/messages';
+import { bestQueueIndex, buildSmsLink, buildWhatsAppDeepLink, buildWhatsAppLink, cleanUnresolvedMessage, messageNeedsFeelGreatLink, personalizeMessage } from '../utils/messages';
 import { isDuplicatePhone, normalizePhone } from '../utils/phone';
 
 const appSource = readFileSync(join(process.cwd(), 'src/App.tsx'), 'utf8');
@@ -162,11 +162,15 @@ describe('cuenta, safe area y plantillas visuales', () => {
     expect(appSource).toContain('https://office.unicity.com/#/dashboard');
     expect(appSource).toContain('https://office.unicity.com/#/library');
     expect(appSource).toContain('https://shop.unicity.com/usa/en/products');
+    expect(appSource).toContain('https://unicity.paylution.com/hw2web/landing.xhtml?faces-redirect=true&refreshme=true');
   });
 
   it('tareas funciona como hub de mensajes de seguimiento', () => {
     expect(appSource).toContain('Mensajes pendientes de seguimiento.');
     expect(appSource).toContain('Activa las notificaciones para recibir avisos antes de tus mensajes.');
+    expect(appSource).toContain('Enviar notificación de prueba');
+    expect(appSource).toContain('requieren Web Push con servidor');
+    expect(appSource).toContain('taskNotificationAt');
     expect(appSource).toContain('Enviar mensaje a');
     expect(appSource).toContain('Seguimiento de 30 días');
     expect(appSource).not.toContain('Abrir cola');
@@ -418,6 +422,7 @@ describe('campanas y cola', () => {
 describe('enlaces externos seguros', () => {
   it('genera enlace de WhatsApp con el numero del contacto', () => {
     expect(buildWhatsAppLink(contact.phone, 'Hola Maria')).toBe('https://wa.me/13215551234?text=Hola%20Maria');
+    expect(buildWhatsAppDeepLink('+1 (321) 555-1234', 'Hola Maria')).toBe('whatsapp://send?phone=13215551234&text=Hola%20Maria');
     expect(buildWhatsAppLink(contact.phone, 'Hola')).not.toContain('14075063846');
   });
 

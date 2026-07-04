@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Cloud,
   Copy,
+  CreditCard,
   Download,
   ExternalLink,
   Eye,
@@ -37,7 +38,7 @@ import { exportContactsCsv, parseContactsCsv, csvRowToContact } from './utils/cs
 import { buildFirst30DayTasks, buildLocalDueAt, buildTaskFromTemplate, currentProgramDay, defaultFollowUpTemplates, defaultWeeklyEvents, findNextMeeting, getDeviceTimezone, isTaskOpen, localDateKey, memberName, parsePastedProspects, resolveFollowUpMessage, templateDisplayTime } from './utils/followup';
 import { compressImage, fileToDataUrl, shareImage } from './utils/image';
 import { clearDriveToken, driveFileToMediaAsset, readDriveToken } from './utils/googleDrive';
-import { bestQueueIndex, buildSmsLink, buildWhatsAppLink, cleanUnresolvedMessage, personalizeMessage } from './utils/messages';
+import { bestQueueIndex, buildSmsLink, buildWhatsAppDeepLink, buildWhatsAppLink, cleanUnresolvedMessage, personalizeMessage } from './utils/messages';
 import { isDuplicatePhone, normalizePhone } from './utils/phone';
 
 type GoogleTokenClient = { requestAccessToken: (options?: { prompt?: string }) => void };
@@ -61,6 +62,7 @@ const entryLogoSrc = `${import.meta.env.BASE_URL}golden-team-logo-transparent.pn
 const officeUrl = 'https://office.unicity.com/#/dashboard';
 const unicityLibraryUrl = 'https://office.unicity.com/#/library';
 const productsUrl = 'https://shop.unicity.com/usa/en/products';
+const paylutionUrl = 'https://unicity.paylution.com/hw2web/landing.xhtml?faces-redirect=true&refreshme=true';
 const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 const googleApiKey = import.meta.env.VITE_GOOGLE_API_KEY || '';
 const googleAppId = import.meta.env.VITE_GOOGLE_APP_ID || '';
@@ -174,6 +176,17 @@ function todayKey() {
 function shortDate(value?: string, language: AppLanguage = 'es') {
   if (!value) return language === 'en' ? 'No date' : 'Sin fecha';
   return new Date(`${value.slice(0, 10)}T12:00:00`).toLocaleDateString(language === 'en' ? 'en-US' : 'es-US', { month: 'short', day: 'numeric' });
+}
+
+function shortDateTime(value?: string, language: AppLanguage = 'es') {
+  if (!value) return language === 'en' ? 'No date' : 'Sin fecha';
+  return new Date(value).toLocaleString(language === 'en' ? 'en-US' : 'es-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function taskNotificationAt(task: FollowUpTask) {
+  const dueAt = new Date(task.scheduledAt || task.dueAt || buildLocalDueAt(task.dueDate, task.dueTime)).getTime();
+  if (Number.isNaN(dueAt)) return '';
+  return new Date(dueAt - (task.reminderMinutes || 30) * 60 * 1000).toISOString();
 }
 
 function normalizeFeelGreatLink(value: string) {
@@ -577,8 +590,8 @@ function App() {
     const timers = visibleOpenTasks
       .filter((task) => task.id && task.id > 0)
       .map((task) => {
-        const dueAt = new Date(task.dueAt || buildLocalDueAt(task.dueDate, task.dueTime)).getTime();
-        const delay = dueAt - Date.now() - 30 * 60 * 1000;
+        const notificationAt = new Date(taskNotificationAt(task)).getTime();
+        const delay = notificationAt - Date.now();
         if (delay <= 0 || delay > 2_147_483_647) return null;
         return window.setTimeout(() => {
           const first = task.contactName.split(/\s+/)[0] || task.contactName;
@@ -655,6 +668,25 @@ function App() {
     setNotice(permission === 'granted'
       ? 'Notificaciones activadas. La app intentará avisarte 30 minutos antes mientras esté abierta.'
       : 'Activa las notificaciones para recibir avisos antes de tus mensajes.');
+  }
+
+  async function sendTestNotification() {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setNotificationPermission('unsupported');
+      setNotice('Este navegador no permite notificaciones locales. Tus tareas seguirán visibles dentro de la app.');
+      return;
+    }
+    const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+    setNotificationPermission(permission);
+    if (permission !== 'granted') {
+      setNotice('Permiso de notificaciones no concedido. Los recordatorios seguirán visibles dentro de la app.');
+      return;
+    }
+    new Notification('Golden Team Connect', {
+      body: 'Notificación de prueba. Los avisos automáticos fuera de la app requieren Web Push con servidor.',
+      tag: `golden-team-test-${Date.now()}`
+    });
+    setNotice('Notificación de prueba enviada si tu navegador la permite.');
   }
 
   async function saveProfile(event: FormEvent) {
@@ -947,12 +979,17 @@ function App() {
   async function openWhatsAppFor(target: QueueItem | FollowUpTask | Contact, message?: string) {
     const phone = 'contactSnapshot' in target ? target.contactSnapshot.phone : target.phone;
     const text = 'personalizedMessage' in target ? target.personalizedMessage : message || ('message' in target ? target.message : '');
+    const deepLink = buildWhatsAppDeepLink(phone, text);
+    const fallbackLink = buildWhatsAppLink(phone, text);
     if (!online) setNotice(lang === 'en' ? 'WhatsApp may need connection.' : 'WhatsApp puede requerir conexión.');
+    window.location.href = deepLink;
+    window.setTimeout(() => {
+      if (document.visibilityState === 'visible') window.location.href = fallbackLink;
+    }, 900);
     if ('kind' in target && target.id && target.id > 0) {
       await db.tasks.update(target.id, { attemptedAt: todayIso(), attemptedChannel: 'WhatsApp' });
       setPendingSendTask({ taskId: target.id, channel: 'WhatsApp' });
     }
-    window.open(buildWhatsAppLink(phone, text), '_blank', 'noopener,noreferrer');
     if ('personalizedMessage' in target) await setQueueStatus(target, 'Abierto');
   }
 
@@ -1326,7 +1363,8 @@ function App() {
     const quickLinks = [
       { name: 'Office', url: officeUrl, icon: <Power size={19} /> },
       { name: 'Library', url: unicityLibraryUrl, icon: <FileText size={19} /> },
-      { name: 'Productos', url: productsUrl, icon: <Package size={19} /> }
+      { name: 'Productos', url: productsUrl, icon: <Package size={19} /> },
+      { name: 'Paylution', url: paylutionUrl, icon: <CreditCard size={19} /> }
     ];
     return (
     <div className="grid gap-4">
@@ -1550,7 +1588,8 @@ function App() {
                 {[
                   { name: 'Office', url: officeUrl, icon: <Power size={18} /> },
                   { name: 'Library', url: unicityLibraryUrl, icon: <FileText size={18} /> },
-                  { name: 'Productos', url: productsUrl, icon: <Package size={18} /> }
+                  { name: 'Productos', url: productsUrl, icon: <Package size={18} /> },
+                  { name: 'Paylution', url: paylutionUrl, icon: <CreditCard size={18} /> }
                 ].map((item) => (
                   <button key={item.name} type="button" onClick={() => window.open(item.url, '_blank', 'noopener,noreferrer')} className="flex min-h-[60px] w-full min-w-0 items-center gap-3 rounded-2xl bg-slate-50 p-3 text-left transition hover:bg-slate-100">
                     <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-white text-brand shadow-sm">{item.icon}</span>
@@ -1921,13 +1960,14 @@ function App() {
     return (
       <div className="grid gap-4">
         <Header title={c.tasks} subtitle={c.tasksSub} />
-        {notificationPermission !== 'granted' ? (
-          <Card className="border border-[#e4d39a] bg-[#f6f0dc]">
-            <p className="text-sm font-bold text-ink">Activa las notificaciones para recibir avisos antes de tus mensajes.</p>
-            <p className="mt-1 text-xs leading-relaxed text-slate-600">La app intentará avisarte 30 minutos antes mientras esté abierta. En iOS/PWA las notificaciones programadas sin backend no siempre se garantizan.</p>
-            <SecondaryButton onClick={requestReminderNotifications} className="mt-3"><Bell size={16} />Activar notificaciones</SecondaryButton>
-          </Card>
-        ) : null}
+        <Card className="border border-[#e4d39a] bg-[#f6f0dc]">
+          <p className="text-sm font-bold text-ink">Notificaciones de recordatorios</p>
+          <p className="mt-1 text-xs leading-relaxed text-slate-600">Las notificaciones automáticas fuera de la app requieren Web Push con servidor. En esta versión, los recordatorios se muestran dentro de la app y la app intentará avisarte 30 minutos antes mientras esté abierta.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {notificationPermission !== 'granted' ? <SecondaryButton onClick={requestReminderNotifications}><Bell size={16} />Activar notificaciones</SecondaryButton> : null}
+            <SecondaryButton onClick={sendTestNotification}><Bell size={16} />Enviar notificación de prueba</SecondaryButton>
+          </div>
+        </Card>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {taskGroupCards.map((card) => (
             <button key={card.group} onClick={() => setTaskGroup(card.group)} className={`rounded-[1.25rem] border p-4 text-left shadow-sm transition ${taskGroup === card.group ? 'border-brand bg-white ring-2 ring-brand/10' : 'border-slate-100 bg-white hover:bg-slate-50'}`}>
@@ -1944,7 +1984,7 @@ function App() {
                 <div className="min-w-0">
                   <h3 className="truncate text-lg font-black text-ink">{task.contactName}</h3>
                   <p className="mt-1 text-sm font-bold text-slate-700">Día {task.sequenceDay ?? task.programDay ?? '-'} · {task.title}</p>
-                  <p className="mt-1 text-xs text-slate-500">{shortDate(task.dueDate, lang)} {task.dueTime} · {task.channel === 'WhatsApp' || task.channel === 'SMS' ? task.channel : 'Método no definido'}</p>
+                  <p className="mt-1 text-xs text-slate-500">{shortDate(task.dueDate, lang)} {task.dueTime} · Aviso {shortDateTime(taskNotificationAt(task), lang)} · {task.channel === 'WhatsApp' || task.channel === 'SMS' ? task.channel : 'Método no definido'}</p>
                 </div>
                 <ChevronRight className="shrink-0 text-slate-400" />
               </div>
@@ -1970,7 +2010,7 @@ function App() {
     return (
       <Card className="grid gap-4">
         {modal ? <button onClick={() => setSelectedTaskId(null)} className="inline-flex w-fit items-center gap-2 text-sm font-black text-brand"><ChevronLeft size={18} />{c.tasks}</button> : null}
-        <div><h2 className="text-xl font-black text-ink">{task.title}</h2><p className="text-sm text-slate-500">{task.contactName} · Día {task.sequenceDay ?? task.programDay ?? '-'} · {task.phone}</p></div>
+        <div><h2 className="text-xl font-black text-ink">{task.title}</h2><p className="text-sm text-slate-500">{task.contactName} · Día {task.sequenceDay ?? task.programDay ?? '-'} · {task.phone}</p><p className="mt-1 text-xs font-semibold text-slate-500">Aviso: {shortDateTime(taskNotificationAt(task), lang)}</p></div>
         <div className="rounded-2xl bg-slate-50 p-3"><p className="whitespace-pre-wrap text-sm text-slate-700">{displayMessage}</p>{displayTask.meetingLink ? <button onClick={() => window.open(displayTask.meetingLink, '_blank', 'noopener,noreferrer')} className="mt-3 inline-flex items-center gap-2 text-sm font-black text-brand"><ExternalLink size={16} />Zoom</button> : null}</div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {isTaskOpen(task) ? <PrimaryButton onClick={() => openWhatsAppFor(displayTask)}><MessageCircle size={16} />WhatsApp</PrimaryButton> : null}
@@ -1993,7 +2033,7 @@ function App() {
 
   return (
     <div className="theme-golden min-h-screen overflow-x-hidden bg-soft text-ink">
-      <main className="mx-auto grid w-full max-w-5xl gap-4 px-4 pb-[calc(env(safe-area-inset-bottom)+6.25rem)] pt-[calc(env(safe-area-inset-top)+1rem)] sm:px-6 lg:pb-10">
+      <main className="mx-auto grid w-full max-w-5xl gap-4 px-4 pb-[calc(env(safe-area-inset-bottom)+6.25rem)] pt-0 sm:px-6 lg:pb-10">
         {currentView}
         <p className="text-center text-xs text-slate-500">{notice}</p>
       </main>
