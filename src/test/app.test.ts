@@ -167,10 +167,15 @@ describe('cuenta, safe area y plantillas visuales', () => {
 
   it('tareas funciona como hub de mensajes de seguimiento', () => {
     expect(appSource).toContain('Mensajes pendientes de seguimiento.');
-    expect(appSource).toContain('Activa las notificaciones para recibir avisos antes de tus mensajes.');
+    expect(appSource).toContain('Prueba de notificaciones');
+    expect(appSource).toContain('Estado: {notificationStatusLabel(notificationPermission)}');
     expect(appSource).toContain('Enviar notificación de prueba');
+    expect(appSource).toContain('Crear reminder de prueba en 2 minutos');
     expect(appSource).toContain('requieren Web Push con servidor');
+    expect(appSource).toContain('Notificación de prueba recibida correctamente.');
+    expect(appSource).toContain('Prueba: enviar mensaje de seguimiento.');
     expect(appSource).toContain('taskNotificationAt');
+    expect(appSource).toContain('showLocalNotification');
     expect(appSource).toContain('Enviar mensaje a');
     expect(appSource).toContain('Seguimiento de 30 días');
     expect(appSource).not.toContain('Abrir cola');

@@ -186,7 +186,15 @@ function shortDateTime(value?: string, language: AppLanguage = 'es') {
 function taskNotificationAt(task: FollowUpTask) {
   const dueAt = new Date(task.scheduledAt || task.dueAt || buildLocalDueAt(task.dueDate, task.dueTime)).getTime();
   if (Number.isNaN(dueAt)) return '';
+  if (task.sourceKey?.startsWith('notification-test:')) return new Date(dueAt).toISOString();
   return new Date(dueAt - (task.reminderMinutes || 30) * 60 * 1000).toISOString();
+}
+
+function notificationStatusLabel(permission: NotificationPermission | 'unsupported') {
+  if (permission === 'unsupported') return 'No compatible';
+  if (permission === 'default') return 'No solicitadas';
+  if (permission === 'granted') return 'Permitidas';
+  return 'Denegadas';
 }
 
 function normalizeFeelGreatLink(value: string) {
@@ -595,15 +603,11 @@ function App() {
         if (delay <= 0 || delay > 2_147_483_647) return null;
         return window.setTimeout(() => {
           const first = task.contactName.split(/\s+/)[0] || task.contactName;
-          const reminder = new Notification(`Enviar mensaje a ${first}`, {
-            body: `Día ${task.sequenceDay ?? task.programDay ?? '-'} · Seguimiento de 30 días`,
-            tag: `golden-team-task-${task.id}`
-          });
-          reminder.onclick = () => {
-            window.focus();
-            setSelectedTaskId(task.id || null);
-            setActive('tareas');
-          };
+          void showLocalNotification(
+            task.sourceKey?.startsWith('notification-test:') ? 'Golden Team Connect' : `Enviar mensaje a ${first}`,
+            task.sourceKey?.startsWith('notification-test:') ? 'Prueba: enviar mensaje de seguimiento.' : `Día ${task.sequenceDay ?? task.programDay ?? '-'} · Seguimiento de 30 días`,
+            `golden-team-task-${task.id}`
+          );
         }, delay);
       })
       .filter((timer): timer is number => typeof timer === 'number');
@@ -670,6 +674,17 @@ function App() {
       : 'Activa las notificaciones para recibir avisos antes de tus mensajes.');
   }
 
+  async function showLocalNotification(title: string, body: string, tag: string) {
+    if ('serviceWorker' in navigator) {
+      const registration = await navigator.serviceWorker.ready.catch(() => null);
+      if (registration?.showNotification) {
+        await registration.showNotification(title, { body, tag });
+        return;
+      }
+    }
+    new Notification(title, { body, tag });
+  }
+
   async function sendTestNotification() {
     if (typeof window === 'undefined' || !('Notification' in window)) {
       setNotificationPermission('unsupported');
@@ -682,11 +697,36 @@ function App() {
       setNotice('Permiso de notificaciones no concedido. Los recordatorios seguirán visibles dentro de la app.');
       return;
     }
-    new Notification('Golden Team Connect', {
-      body: 'Notificación de prueba. Los avisos automáticos fuera de la app requieren Web Push con servidor.',
-      tag: `golden-team-test-${Date.now()}`
-    });
+    await showLocalNotification('Golden Team Connect', 'Notificación de prueba recibida correctamente.', `golden-team-test-${Date.now()}`);
     setNotice('Notificación de prueba enviada si tu navegador la permite.');
+  }
+
+  async function createTwoMinuteReminderTest() {
+    const due = new Date(Date.now() + 2 * 60 * 1000);
+    const dueDate = localDateKey(due);
+    const dueTime = due.toTimeString().slice(0, 5);
+    const dueAt = `${dueDate}T${dueTime}`;
+    const id = await db.tasks.add({
+      kind: 'Seguimiento',
+      program: 'Prueba de notificaciones',
+      title: 'Prueba de notificaciones',
+      contactName: 'Golden Team Connect',
+      phone: settings.personalNumber || '',
+      channel: 'No definido',
+      dueDate,
+      dueTime,
+      dueAt,
+      scheduledAt: dueAt,
+      message: 'Prueba: enviar mensaje de seguimiento.',
+      resolvedMessage: 'Prueba: enviar mensaje de seguimiento.',
+      status: 'Pendiente',
+      createdAt: todayIso(),
+      sourceKey: `notification-test:${Date.now()}`
+    });
+    setTaskGroup('Hoy');
+    setSelectedTaskId(id);
+    setActive('tareas');
+    await loadAll('Reminder de prueba creado para dentro de 2 minutos.');
   }
 
   async function saveProfile(event: FormEvent) {
@@ -1961,11 +2001,13 @@ function App() {
       <div className="grid gap-4">
         <Header title={c.tasks} subtitle={c.tasksSub} />
         <Card className="border border-[#e4d39a] bg-[#f6f0dc]">
-          <p className="text-sm font-bold text-ink">Notificaciones de recordatorios</p>
-          <p className="mt-1 text-xs leading-relaxed text-slate-600">Las notificaciones automáticas fuera de la app requieren Web Push con servidor. En esta versión, los recordatorios se muestran dentro de la app y la app intentará avisarte 30 minutos antes mientras esté abierta.</p>
+          <p className="text-sm font-bold text-ink">Prueba de notificaciones</p>
+          <p className="mt-1 text-xs font-black uppercase tracking-wide text-slate-500">Estado: {notificationStatusLabel(notificationPermission)}</p>
+          <p className="mt-1 text-xs leading-relaxed text-slate-600">Las notificaciones automáticas con la app cerrada requieren Web Push con servidor. Esta prueba valida notificaciones locales disponibles en este dispositivo.</p>
           <div className="mt-3 flex flex-wrap gap-2">
-            {notificationPermission !== 'granted' ? <SecondaryButton onClick={requestReminderNotifications}><Bell size={16} />Activar notificaciones</SecondaryButton> : null}
+            <SecondaryButton onClick={requestReminderNotifications}><Bell size={16} />Activar notificaciones</SecondaryButton>
             <SecondaryButton onClick={sendTestNotification}><Bell size={16} />Enviar notificación de prueba</SecondaryButton>
+            <SecondaryButton onClick={createTwoMinuteReminderTest}><Bell size={16} />Crear reminder de prueba en 2 minutos</SecondaryButton>
           </div>
         </Card>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
