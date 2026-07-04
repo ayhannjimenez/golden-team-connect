@@ -197,6 +197,13 @@ function notificationStatusLabel(permission: NotificationPermission | 'unsupport
   return 'Denegadas';
 }
 
+function notificationTaskUrl(taskId?: number) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('gtcView', 'tareas');
+  if (taskId) url.searchParams.set('gtcTaskId', String(taskId));
+  return url.href;
+}
+
 function normalizeFeelGreatLink(value: string) {
   return value.trim().replace(/\s+/g, '');
 }
@@ -594,6 +601,19 @@ function App() {
   const taskBadge = todayTasks.length + overdueTasks.length;
 
   useEffect(() => {
+    if (!ready || !settings.sessionActive) return;
+    const params = new URLSearchParams(window.location.search);
+    const targetView = params.get('gtcView');
+    const targetTaskId = Number(params.get('gtcTaskId') || '');
+    if (targetView === 'tareas' || targetTaskId) setActive('tareas');
+    if (!targetTaskId) return;
+    const targetTask = tasks.find((task) => task.id === targetTaskId);
+    if (!targetTask) return;
+    setTaskGroup(targetTask.status === 'Completada' ? 'Completadas' : targetTask.dueDate < todayKey() ? 'Vencidas' : targetTask.dueDate > todayKey() ? 'Próximas' : 'Hoy');
+    setSelectedTaskId(targetTaskId);
+  }, [ready, settings.sessionActive, tasks]);
+
+  useEffect(() => {
     if (typeof window === 'undefined' || !('Notification' in window) || notificationPermission !== 'granted') return;
     const timers = visibleOpenTasks
       .filter((task) => task.id && task.id > 0)
@@ -603,10 +623,12 @@ function App() {
         if (delay <= 0 || delay > 2_147_483_647) return null;
         return window.setTimeout(() => {
           const first = task.contactName.split(/\s+/)[0] || task.contactName;
+          const isTestReminder = task.sourceKey?.startsWith('notification-test:');
           void showLocalNotification(
-            task.sourceKey?.startsWith('notification-test:') ? 'Golden Team Connect' : `Enviar mensaje a ${first}`,
-            task.sourceKey?.startsWith('notification-test:') ? 'Prueba: enviar mensaje de seguimiento.' : `Día ${task.sequenceDay ?? task.programDay ?? '-'} · Seguimiento de 30 días`,
-            `golden-team-task-${task.id}`
+            isTestReminder ? 'Golden Team Connect' : `Enviar mensaje a ${first}`,
+            isTestReminder ? 'Tienes un reminder de prueba pendiente.' : `Día ${task.sequenceDay ?? task.programDay ?? '-'} · Seguimiento de 30 días`,
+            `golden-team-task-${task.id}`,
+            { type: 'reminder', reminderId: task.id, taskId: task.id, url: notificationTaskUrl(task.id) }
           );
         }, delay);
       })
@@ -674,15 +696,16 @@ function App() {
       : 'Activa las notificaciones para recibir avisos antes de tus mensajes.');
   }
 
-  async function showLocalNotification(title: string, body: string, tag: string) {
+  async function showLocalNotification(title: string, body: string, tag: string, data: NotificationOptions['data']) {
+    const options: NotificationOptions = { body, tag, data };
     if ('serviceWorker' in navigator) {
       const registration = await navigator.serviceWorker.ready.catch(() => null);
       if (registration?.showNotification) {
-        await registration.showNotification(title, { body, tag });
+        await registration.showNotification(title, options);
         return;
       }
     }
-    new Notification(title, { body, tag });
+    new Notification(title, options);
   }
 
   async function sendTestNotification() {
@@ -697,7 +720,10 @@ function App() {
       setNotice('Permiso de notificaciones no concedido. Los recordatorios seguirán visibles dentro de la app.');
       return;
     }
-    await showLocalNotification('Golden Team Connect', 'Notificación de prueba recibida correctamente.', `golden-team-test-${Date.now()}`);
+    await showLocalNotification('Golden Team Connect', 'Notificación de prueba recibida correctamente.', `golden-team-test-${Date.now()}`, {
+      type: 'test',
+      url: notificationTaskUrl()
+    });
     setNotice('Notificación de prueba enviada si tu navegador la permite.');
   }
 
@@ -709,21 +735,21 @@ function App() {
     const id = await db.tasks.add({
       kind: 'Seguimiento',
       program: 'Prueba de notificaciones',
-      title: 'Prueba de notificaciones',
-      contactName: 'Golden Team Connect',
+      title: 'Prueba de recordatorio',
+      contactName: 'Prueba de recordatorio',
       phone: settings.personalNumber || '',
-      channel: 'No definido',
+      channel: 'WhatsApp',
       dueDate,
       dueTime,
       dueAt,
       scheduledAt: dueAt,
-      message: 'Prueba: enviar mensaje de seguimiento.',
-      resolvedMessage: 'Prueba: enviar mensaje de seguimiento.',
+      message: 'Este es un reminder de prueba para validar notificaciones.',
+      resolvedMessage: 'Este es un reminder de prueba para validar notificaciones.',
       status: 'Pendiente',
       createdAt: todayIso(),
       sourceKey: `notification-test:${Date.now()}`
     });
-    setTaskGroup('Hoy');
+    setTaskGroup(dueDate === todayKey() ? 'Hoy' : 'Próximas');
     setSelectedTaskId(id);
     setActive('tareas');
     await loadAll('Reminder de prueba creado para dentro de 2 minutos.');
@@ -2004,6 +2030,12 @@ function App() {
           <p className="text-sm font-bold text-ink">Prueba de notificaciones</p>
           <p className="mt-1 text-xs font-black uppercase tracking-wide text-slate-500">Estado: {notificationStatusLabel(notificationPermission)}</p>
           <p className="mt-1 text-xs leading-relaxed text-slate-600">Las notificaciones automáticas con la app cerrada requieren Web Push con servidor. Esta prueba valida notificaciones locales disponibles en este dispositivo.</p>
+          <p className="mt-2 text-xs leading-relaxed text-slate-600">Los avisos locales funcionan mientras la app está abierta o activa. Para avisos garantizados con la app cerrada se requiere Web Push con servidor.</p>
+          <div className="mt-2 grid gap-1 text-xs leading-relaxed text-slate-600">
+            <p><strong>App abierta:</strong> crea el reminder, espera 2 minutos y confirma si llega la notificación.</p>
+            <p><strong>Segundo plano:</strong> crea el reminder, sal al Home Screen, espera 2 minutos y confirma si llega.</p>
+            <p><strong>App cerrada:</strong> crea el reminder, cierra la app y valida sabiendo que sin backend no hay garantía.</p>
+          </div>
           <div className="mt-3 flex flex-wrap gap-2">
             <SecondaryButton onClick={requestReminderNotifications}><Bell size={16} />Activar notificaciones</SecondaryButton>
             <SecondaryButton onClick={sendTestNotification}><Bell size={16} />Enviar notificación de prueba</SecondaryButton>

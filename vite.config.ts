@@ -38,6 +38,7 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         navigateFallback: 'index.html',
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest}'],
+        importScripts: ['notification-click.js'],
         runtimeCaching: [
           {
             urlPattern: ({ request }) => request.mode === 'navigate',

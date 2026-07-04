@@ -12,6 +12,7 @@ import { bestQueueIndex, buildSmsLink, buildWhatsAppDeepLink, buildWhatsAppLink,
 import { isDuplicatePhone, normalizePhone } from '../utils/phone';
 
 const appSource = readFileSync(join(process.cwd(), 'src/App.tsx'), 'utf8');
+const notificationClickSource = readFileSync(join(process.cwd(), 'public/notification-click.js'), 'utf8');
 
 const contact: Contact = {
   id: 1,
@@ -172,12 +173,21 @@ describe('cuenta, safe area y plantillas visuales', () => {
     expect(appSource).toContain('Enviar notificación de prueba');
     expect(appSource).toContain('Crear reminder de prueba en 2 minutos');
     expect(appSource).toContain('requieren Web Push con servidor');
+    expect(appSource).toContain('Los avisos locales funcionan mientras la app está abierta o activa.');
     expect(appSource).toContain('Notificación de prueba recibida correctamente.');
-    expect(appSource).toContain('Prueba: enviar mensaje de seguimiento.');
+    expect(appSource).toContain('Prueba de recordatorio');
+    expect(appSource).toContain('Este es un reminder de prueba para validar notificaciones.');
+    expect(appSource).toContain('Tienes un reminder de prueba pendiente.');
+    expect(appSource).toContain("type: 'reminder'");
+    expect(appSource).toContain('notificationTaskUrl(task.id)');
     expect(appSource).toContain('taskNotificationAt');
     expect(appSource).toContain('showLocalNotification');
     expect(appSource).toContain('Enviar mensaje a');
     expect(appSource).toContain('Seguimiento de 30 días');
+    expect(notificationClickSource).toContain("self.addEventListener('notificationclick'");
+    expect(notificationClickSource).toContain('clients.matchAll');
+    expect(notificationClickSource).toContain('clients.openWindow');
+    expect(notificationClickSource).toContain('gtcTaskId');
     expect(appSource).not.toContain('Abrir cola');
   });
 
