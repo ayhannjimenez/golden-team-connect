@@ -37,6 +37,7 @@ export default defineConfig({
       workbox: {
         cleanupOutdatedCaches: true,
         navigateFallback: 'index.html',
+        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest}'],
         importScripts: ['notification-click.js'],
         runtimeCaching: [

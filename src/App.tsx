@@ -58,7 +58,7 @@ type AccountPanel = 'profile' | 'link' | 'templates' | 'system' | 'language' | n
 type BroadcastTab = 'lists' | 'library';
 type DriveFilter = 'all' | 'photos' | 'videos';
 
-const entryLogoSrc = `${import.meta.env.BASE_URL}golden-team-logo-transparent.png`;
+const entryLogoSrc = `${import.meta.env.BASE_URL}unicity-gt-logo.png`;
 const officeUrl = 'https://office.unicity.com/#/dashboard';
 const unicityLibraryUrl = 'https://office.unicity.com/#/library';
 const productsUrl = 'https://shop.unicity.com/usa/en/products';
@@ -1402,7 +1402,9 @@ function App() {
     <div className="theme-golden min-h-screen min-h-[100svh] min-h-[100dvh] bg-[#000000] px-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] pt-[calc(env(safe-area-inset-top)+1.25rem)] text-white">
       <div className="mx-auto flex min-h-[calc(100vh-2.5rem)] min-h-[calc(100svh-2.5rem)] min-h-[calc(100dvh-2.5rem)] max-w-md flex-col justify-center bg-[#000000]">
         <div className="mb-6 text-center">
-          <img src={entryLogoSrc} alt="Golden Team" className="mx-auto mb-5 h-auto w-[82vw] max-w-[20rem] object-contain sm:max-w-[22rem]" />
+          <div className="mx-auto mb-4 w-[84vw] max-w-[21rem] sm:max-w-[24rem]">
+            <img src={entryLogoSrc} alt="Golden Team" className="h-auto w-full object-contain" />
+          </div>
           <p className="text-[0.66rem] font-bold uppercase tracking-[0.24em] text-gold/90">Acceso interno del equipo</p>
           <h1 className="mt-2.5 text-[2rem] font-black leading-tight tracking-normal sm:text-[2.15rem]">Golden Team Connect</h1>
           <p className="mt-1.5 text-[0.95rem] leading-relaxed text-white/72">Organiza. Da seguimiento. Mantente conectado.</p>
